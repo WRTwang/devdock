@@ -6,8 +6,7 @@ out/
 logs/
 .DS_Store
 Thumbs.db
+.preview/
 .env.devdock.state.json
 .env.devdock.bak
 profiles.json
-
-.preview/
