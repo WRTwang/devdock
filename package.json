@@ -1,0 +1,52 @@
+{
+  "name": "devdock",
+  "productName": "DevDock",
+  "version": "0.1.0",
+  "description": "Windows 本地项目启动器：一键搭环境、一键启动，切换项目自动清理旧环境",
+  "main": "electron/main.js",
+  "author": "DevDock contributors",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test": "node --test",
+    "postinstall": "node node_modules/electron/install.js",
+    "icon": "node scripts/make-icon.js",
+    "screenshot": "node scripts/screenshot.js",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "io.github.devdock.app",
+    "productName": "DevDock",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DevDock"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+release/
+dist/
+out/
+*.log
+logs/
+.DS_Store
+Thumbs.db
+.env.devdock.state.json
+.env.devdock.bak
+profiles.json
