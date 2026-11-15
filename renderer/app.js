@@ -696,7 +696,7 @@ async function init() {
   syncTabs();
   try {
     await refresh();
-    if (state.selectedId) ensureDetection(state.selectedId);
+    for (const profile of state.profiles) ensureDetection(profile.id);
     $('app-version').textContent = state.appVersion ? `v${state.appVersion}` : '';
   } catch (error) {
     toast(`初始化失败：${error.message}`, 'error');

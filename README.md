@@ -11,6 +11,10 @@
 
 ---
 
+<div align="center">
+  <img src="assets/screenshot.png" alt="DevDock 主界面：左侧项目档案，右侧运行日志" width="900" />
+</div>
+
 ## 它解决什么问题
 
 你有十几个本地仓库。每次开工都要回忆：这个项目用 pnpm 还是 npm？先跑 migrate 还是先起 docker？`.env` 要填哪几个变量？开三个终端窗口切来切去，关掉之后进程还赖在后台。

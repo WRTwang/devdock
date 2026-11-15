@@ -60,7 +60,7 @@ server.listen(0, () => {
 async function waitForEndpoint(url, attempts = 120) {
   for (let i = 0; i < attempts; i += 1) {
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
       if (response.ok) return await response.json();
     } catch {
       /* 还没起来 */
@@ -86,16 +86,30 @@ function createCdpClient(wsUrl) {
   });
 
   const ready = new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve);
-    socket.addEventListener('error', () => reject(new Error('CDP 连接失败')));
+    socket.addEventListener('open', () => {
+      console.log('CDP WebSocket 已连接');
+      resolve();
+    });
+    socket.addEventListener('error', (event) => reject(new Error(`CDP 连接失败: ${event.message || 'unknown'}`)));
   });
 
   return {
     ready,
     send(method, params = {}) {
       const id = nextId++;
+      console.log(`→ CDP ${method}`);
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const timer = setTimeout(() => reject(new Error(`CDP ${method} 超时`)), 15000);
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
         socket.send(JSON.stringify({ id, method, params }));
       });
     },
@@ -116,7 +130,7 @@ async function main() {
     env: {
       ...process.env,
       DEVDOCK_DEVTOOLS: '0',
-      DEVDOCK_HIDDEN: '1',
+      DEVDOCK_HIDDEN: '0',
       DEVDOCK_DATA_DIR: appData,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -126,9 +140,11 @@ async function main() {
   const logs = [];
   child.stdout.on('data', (buffer) => logs.push(buffer.toString()));
   child.stderr.on('data', (buffer) => logs.push(buffer.toString()));
+  console.log('已启动 Electron，等待调试端口…');
 
   try {
     const targets = await waitForEndpoint(`http://127.0.0.1:${PORT}/json/list`);
+    console.log(`调试端口就绪，发现 ${targets.length} 个 target`);
     const page = targets.find((target) => target.type === 'page' && target.url.includes('index.html'));
     if (!page) throw new Error('没有找到页面 target');
 
@@ -183,11 +199,25 @@ async function main() {
     })()`);
 
     await sleep(400);
-    await evaluate(`(async () => {
-      const api = window.devdock;
-      await api.start(${JSON.stringify(injected)});
+    // 直接写档案不会触发界面刷新，重新加载让 UI 读取新数据
+    await cdp.send('Page.reload');
+    await sleep(1600);
+
+    await evaluate(`document.getElementById('btn-start').click()`);
+
+    const logText = await evaluate(`(async () => {
+      const output = document.getElementById('log-output');
+      for (let i = 0; i < 50; i += 1) {
+        const text = output ? output.textContent : '';
+        if (text.includes('listening')) return text.slice(-200);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return 'TIMEOUT: ' + (output ? output.textContent.slice(-200) : 'no output');
     })()`);
-    await sleep(3200);
+    console.log('日志片段:', logText);
+
+    await evaluate(`document.querySelector('[data-tab="logs"]').click()`);
+    await sleep(800);
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
     const outFile = path.join(ROOT, 'assets', 'screenshot.png');

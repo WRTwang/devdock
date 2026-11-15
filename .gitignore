@@ -9,3 +9,5 @@ Thumbs.db
 .env.devdock.state.json
 .env.devdock.bak
 profiles.json
+
+.preview/
