@@ -110,6 +110,9 @@
             <button class="tab" data-tab="logs">运行日志</button>
             <span class="tab-spacer"></span>
             <div class="log-tools" id="log-tools" hidden>
+              <select class="mini-select" id="log-service-filter">
+                <option value="">全部服务</option>
+              </select>
               <label class="switch-label">
                 <input type="checkbox" id="auto-scroll" checked />
                 <span>自动滚动</span>
@@ -132,19 +135,8 @@
               </article>
 
               <article class="card">
-                <h3>命令</h3>
-                <div class="cmd-block">
-                  <span class="cmd-label">安装</span>
-                  <code id="cfg-setup-cmd">—</code>
-                </div>
-                <div class="cmd-block">
-                  <span class="cmd-label">启动</span>
-                  <code id="cfg-start-cmd">—</code>
-                </div>
-                <div class="cmd-block">
-                  <span class="cmd-label">停止前</span>
-                  <code id="cfg-stop-cmd">—</code>
-                </div>
+                <h3>服务</h3>
+                <div class="service-list" id="cfg-services"></div>
               </article>
 
               <article class="card">
@@ -244,6 +236,7 @@
     <div class="toasts" id="toasts"></div>
     <script src="../electron/services.js"></script>
     <script src="service-form.js"></script>
+    <script src="log-filter.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

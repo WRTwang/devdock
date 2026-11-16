@@ -254,6 +254,13 @@ async function main() {
     fs.writeFileSync(editorFile, Buffer.from(editorShot.data, 'base64'));
     console.log(`已保存编辑器截图 ${editorFile}`);
 
+    await evaluate(`document.getElementById('editor').close(); document.querySelector('[data-tab="config"]').click()`);
+    await sleep(500);
+    const configShot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    const configFile = path.join(ROOT, 'assets', 'screenshot-config.png');
+    fs.writeFileSync(configFile, Buffer.from(configShot.data, 'base64'));
+    console.log(`已保存配置页截图 ${configFile}`);
+
     const status = await evaluate('(async () => JSON.stringify(await window.devdock.status()))()');
     console.log('运行状态:', status);
 

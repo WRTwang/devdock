@@ -2,6 +2,7 @@
 
 const api = window.devdock;
 const ServiceForm = window.DevDockServiceForm;
+const LogFilter = window.DevDockLogFilter;
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -11,6 +12,7 @@ const state = {
   running: {},
   selectedId: null,
   tab: 'config',
+  logFilter: '',
   editingId: null,
   editorServices: [],
   busy: {},
@@ -187,6 +189,7 @@ function renderDetail() {
   $('btn-setup').disabled = Boolean(state.busy[profile.id]);
 
   renderConfig(profile);
+  renderLogServiceFilter(profile);
   renderActivePill();
 }
 
@@ -210,9 +213,7 @@ function renderConfig(profile) {
     : '未搭建';
   $('cfg-last-used').textContent = fmtDateTime(profile.lastUsedAt);
 
-  setCommand('cfg-setup-cmd', profile.setupCommand);
-  setCommand('cfg-start-cmd', profile.startCommand);
-  setCommand('cfg-stop-cmd', profile.stopCommand);
+  renderServiceCard(profile);
 
   const envBox = $('cfg-env-vars');
   if (profile.envVars.length === 0) {
@@ -244,6 +245,7 @@ function renderConfig(profile) {
 
 function setCommand(id, command) {
   const node = $(id);
+  if (!node) return;
   if (command) {
     node.textContent = command;
     node.classList.remove('empty');
@@ -251,6 +253,65 @@ function setCommand(id, command) {
     node.textContent = '未配置';
     node.classList.add('empty');
   }
+}
+
+const ROLE_LABELS = {
+  frontend: '前端',
+  backend: '后端',
+  database: '数据库',
+  worker: '后台任务',
+  app: '应用',
+};
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role;
+}
+
+function renderServiceCard(profile) {
+  const services = Array.isArray(profile.services) ? profile.services : [];
+  const summary = LogFilter.summarizeServices(services, state.running[profile.id]);
+  const box = $('cfg-services');
+  const nameById = new Map(services.map((service) => [service.id, service.name]));
+
+  if (summary.length === 0) {
+    box.innerHTML = '<span class="mini-tag">未配置服务</span>';
+    return;
+  }
+
+  box.innerHTML = summary
+    .map(
+      (service) => `
+      <div class="service-item">
+        <div class="service-item-head">
+          <span class="status-dot ${service.running ? 'running' : ''}"></span>
+          <span class="service-item-name">${escapeHtml(service.name)}</span>
+          <span class="mini-tag">${roleLabel(service.role)}</span>
+          ${service.port ? `<span class="mini-tag">:${service.port}</span>` : ''}
+        </div>
+        <code class="${service.startCommand ? '' : 'blank'}">${escapeHtml(service.startCommand || '无启动命令')}</code>
+        ${
+          service.dependsOn && service.dependsOn.length
+            ? `<div class="service-item-meta">依赖 ${service.dependsOn
+                .map((id) => escapeHtml(nameById.get(id) || id))
+                .join('、')}</div>`
+            : ''
+        }
+      </div>`,
+    )
+    .join('');
+}
+
+function renderLogServiceFilter(profile) {
+  const select = $('log-service-filter');
+  const services = Array.isArray(profile.services) ? profile.services : [];
+  const options = ['<option value="">全部服务</option>']
+    .concat(services.map((service) => `<option value="${escapeHtml(service.id)}">${escapeHtml(service.name)}</option>`))
+    .join('');
+  select.innerHTML = options;
+
+  const stillExists = services.some((service) => service.id === state.logFilter);
+  if (!stillExists) state.logFilter = '';
+  select.value = state.logFilter;
 }
 
 function ensureDetection(id) {
@@ -285,10 +346,11 @@ function logStore(projectId) {
 function appendLog(payload) {
   const { projectId, stream, chunk, logFile } = payload;
   if (!projectId || !chunk) return;
+  const serviceId = payload.serviceId || 'main';
   const store = logStore(projectId);
   if (logFile) store.logFile = logFile;
 
-  store.chunks.push({ stream, text: chunk });
+  store.chunks.push({ serviceId, stream, text: chunk });
   store.bytes += chunk.length;
   while (store.bytes > 1_500_000 && store.chunks.length > 1) {
     const removed = store.chunks.shift();
@@ -296,7 +358,9 @@ function appendLog(payload) {
   }
 
   if (state.selectedId === projectId && state.tab === 'logs') {
-    appendLogDom(stream, chunk);
+    if (!state.logFilter || state.logFilter === serviceId) {
+      appendLogDom(stream, chunk);
+    }
   }
 }
 
@@ -324,15 +388,20 @@ function renderLogs() {
   const output = $('log-output');
   output.innerHTML = '';
   const store = state.logs.get(state.selectedId);
-  if (!store || store.chunks.length === 0) {
+  const visible = store ? LogFilter.filterChunks(store.chunks, state.logFilter) : [];
+
+  if (visible.length === 0) {
     const placeholder = document.createElement('span');
     placeholder.className = 'placeholder';
-    placeholder.textContent = '等待输出… 点击「启动」或「搭环境」后日志会显示在这里。';
+    placeholder.textContent = state.logFilter
+      ? '该服务还没有输出。'
+      : '等待输出… 点击「启动」或「搭环境」后日志会显示在这里。';
     output.appendChild(placeholder);
     return;
   }
+
   const fragment = document.createDocumentFragment();
-  for (const chunk of store.chunks) {
+  for (const chunk of visible) {
     const span = document.createElement('span');
     span.className = lineClass(chunk.stream);
     span.textContent = chunk.text;
@@ -759,6 +828,11 @@ function bindEvents() {
     }
   });
 
+  $('log-service-filter').addEventListener('change', (event) => {
+    state.logFilter = event.target.value;
+    if (state.tab === 'logs') renderLogs();
+  });
+
   $('btn-clear-log').addEventListener('click', () => {
     const store = state.logs.get(state.selectedId);
     if (store) {
@@ -806,13 +880,24 @@ function bindEvents() {
     }
     if (payload.type === 'running') {
       const id = payload.projectId;
-      if (payload.running) {
-        state.running[id] = { running: true, kinds: [payload.kind] };
-        if (payload.kind === 'start') delete state.busy[id];
+      const serviceId = payload.serviceId || 'main';
+      const bucket = state.running[id] || { running: false, services: [] };
+      const services = new Set(bucket.services || []);
+
+      if (payload.exitCode === undefined) services.add(serviceId);
+      else services.delete(serviceId);
+
+      if (services.size > 0) {
+        state.running[id] = { running: true, services: [...services] };
       } else {
         delete state.running[id];
-        if (payload.kind === 'start' || payload.kind === 'setup') delete state.busy[id];
       }
+
+      if (payload.exitCode !== undefined && (payload.kind === 'start' || payload.kind === 'setup')) {
+        delete state.busy[id];
+      }
+      if (payload.kind === 'start' && payload.exitCode === undefined) delete state.busy[id];
+
       renderAll();
       return;
     }

@@ -22,6 +22,7 @@ fs.writeFileSync(path.join(OUT, 'index.html'), html);
 fs.copyFileSync(path.join(ROOT, 'renderer', 'styles.css'), path.join(OUT, 'styles.css'));
 fs.copyFileSync(path.join(ROOT, 'renderer', 'app.js'), path.join(OUT, 'app.js'));
 fs.copyFileSync(path.join(ROOT, 'renderer', 'service-form.js'), path.join(OUT, 'service-form.js'));
+fs.copyFileSync(path.join(ROOT, 'renderer', 'log-filter.js'), path.join(OUT, 'log-filter.js'));
 fs.copyFileSync(path.join(ROOT, 'electron', 'services.js'), path.join(OUT, 'services.core.js'));
 
 fs.writeFileSync(
@@ -107,7 +108,10 @@ const scripts = [
 
 setTimeout(() => {
   scripts.forEach((chunk, index) => {
-    setTimeout(() => logCallback && logCallback({ projectId: 'p-api', stream: chunk.stream, chunk: chunk.text }), index * 90);
+    setTimeout(
+      () => logCallback && logCallback({ projectId: 'p-api', serviceId: 'api', stream: chunk.stream, chunk: chunk.text }),
+      index * 90,
+    );
   });
 }, 450);
 
@@ -117,9 +121,18 @@ setInterval(() => {
   if (logCallback) {
     logCallback({
       projectId: 'p-api',
+      serviceId: 'api',
       stream: 'stdout',
       chunk: 'GET /v1/health 200 - ' + (2 + (beat % 5)) + 'ms\\n',
     });
+    if (beat % 3 === 0) {
+      logCallback({
+        projectId: 'p-api',
+        serviceId: 'db',
+        stream: 'stdout',
+        chunk: 'LOG:  checkpoint complete: wrote 3 buffers (0.0%)\\n',
+      });
+    }
   }
 }, 2400);
 

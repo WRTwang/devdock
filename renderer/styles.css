@@ -968,6 +968,78 @@ select {
   color: #a8c7ff;
 }
 
+/* ---------- 服务卡片 ---------- */
+.service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.service-item {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #0c0f14;
+  padding: 9px 11px;
+}
+
+.service-item-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+.service-item-head .status-dot {
+  margin-top: 0;
+  width: 7px;
+  height: 7px;
+}
+
+.service-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.service-item code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #a8c7ff;
+  background: #08090c;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.service-item code.blank {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.service-item-meta {
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.mini-select {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.mini-select:focus {
+  border-color: rgba(107, 140, 255, 0.6);
+}
+
 /* ---------- Toast ---------- */
 .toasts {
   position: fixed;
