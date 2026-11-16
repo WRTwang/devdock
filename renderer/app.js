@@ -25,6 +25,7 @@ const state = {
   pendingPlan: null,
   pendingDbProfile: null,
   pendingDelete: null,
+  issue: null,
   logs: new Map(), // projectId -> { chunks: [], logFile: string|null, bytes: number }
   autoScroll: true,
   appVersion: '',
@@ -657,6 +658,68 @@ async function confirmDelete() {
   }
 }
 
+/* ---------------- 启动失败诊断 ---------------- */
+
+function showIssue(payload) {
+  const diagnosis = payload && payload.diagnosis ? payload.diagnosis : payload;
+  if (!diagnosis) return;
+  state.issue = { projectId: payload.projectId || null, serviceId: payload.serviceId || null, diagnosis };
+
+  $('issue-title').textContent = diagnosis.title || '启动失败';
+  $('issue-message').textContent = diagnosis.message || '';
+  $('issue-suggestions').innerHTML = (diagnosis.suggestions || [])
+    .map((text) => `<li>${escapeHtml(text)}</li>`)
+    .join('');
+  $('issue-suggestions').hidden = !(diagnosis.suggestions && diagnosis.suggestions.length);
+
+  const excerpt = Array.isArray(diagnosis.excerpt) ? diagnosis.excerpt : [];
+  $('issue-excerpt').hidden = excerpt.length === 0;
+  $('issue-excerpt').textContent = excerpt.join('\n');
+
+  $('btn-issue-fix').hidden = !diagnosis.autoFix || diagnosis.autoFix === 'elevate';
+  $('btn-issue-elevate').hidden = !diagnosis.elevate;
+
+  const store = state.logs.get(state.issue.projectId);
+  $('btn-issue-log').hidden = !(store && store.logFile);
+
+  $('issue-dialog').showModal();
+}
+
+async function fixIssue() {
+  const issue = state.issue;
+  if (!issue) return;
+  const button = $('btn-issue-fix');
+  button.disabled = true;
+  try {
+    const result = await api.fixIssue(issue.projectId, {
+      action: issue.diagnosis.autoFix,
+      port: issue.diagnosis.port,
+    });
+    toast(result.message, result.fixed ? 'success' : 'error');
+    if (result.retry) {
+      $('issue-dialog').close();
+      state.issue = null;
+      const profile = profileById(issue.projectId);
+      if (profile) setTimeout(() => start(profile), 300);
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function elevateIssue() {
+  const issue = state.issue;
+  if (!issue) return;
+  try {
+    const result = await api.fixIssue(issue.projectId, { action: 'elevate' });
+    toast(result.message, 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 /* ---------------- 日志 ---------------- */
 
 function logStore(projectId) {
@@ -765,6 +828,7 @@ async function start(profile) {
     return;
   }
 
+  if (state.issue && state.issue.projectId !== profile.id) state.issue = null;
   state.busy[profile.id] = 'start';
   renderDetail();
   try {
@@ -774,7 +838,7 @@ async function start(profile) {
   } catch (error) {
     delete state.busy[profile.id];
     renderDetail();
-    toast(error.message, 'error');
+    if (!(state.issue && state.issue.projectId === profile.id)) toast(error.message, 'error');
   }
 }
 
@@ -1187,6 +1251,20 @@ function bindEvents() {
     confirmDelete();
   });
 
+  const closeIssue = () => {
+    state.issue = null;
+    $('issue-dialog').close();
+  };
+  $('issue-close').addEventListener('click', closeIssue);
+  $('btn-issue-close').addEventListener('click', closeIssue);
+  $('issue-form').addEventListener('submit', (event) => event.preventDefault());
+  $('btn-issue-fix').addEventListener('click', fixIssue);
+  $('btn-issue-elevate').addEventListener('click', elevateIssue);
+  $('btn-issue-log').addEventListener('click', () => {
+    const store = state.issue ? state.logs.get(state.issue.projectId) : null;
+    if (store && store.logFile) api.revealLog(store.logFile).catch((error) => toast(error.message, 'error'));
+  });
+
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       state.tab = tab.dataset.tab;
@@ -1300,6 +1378,13 @@ function bindEvents() {
     if (payload.type === 'db-ready') {
       state.dbReady.add(payload.projectId);
       renderDetail();
+      return;
+    }
+    if (payload.type === 'start-failed' || payload.type === 'start-blocked') {
+      delete state.busy[payload.projectId];
+      delete state.envBusy[payload.projectId];
+      renderDetail();
+      showIssue(payload);
       return;
     }
     if (payload.type === 'error') {

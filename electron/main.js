@@ -3,12 +3,15 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { spawn } = require('node:child_process');
 const { Store } = require('./store');
 const { detectProject } = require('./detector');
 const { Runner } = require('./runner');
 const { Environment } = require('./environment');
 const envcheck = require('./envcheck');
 const dbstart = require('./dbstart');
+const { diagnoseStartFailure, detectSelfLaunch } = require('./diagnose');
+const { findPortOwners, killPids } = require('./issuefix');
 const linker = require('./linker');
 
 const isDev = !app.isPackaged;
@@ -41,6 +44,22 @@ function persistDatabase(profile, database) {
     : null;
   if (JSON.stringify(profile.db || null) === JSON.stringify(db)) return profile;
   return store.saveProfile({ ...profile, db });
+}
+
+/** 以管理员身份重启 DevDock（权限类问题的一键修复入口）。 */
+function relaunchAsAdmin() {
+  const exe = process.execPath;
+  const args = app.isPackaged ? [] : [app.getAppPath()];
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  const argList = args.length ? ` -ArgumentList ${args.map(quote).join(',')}` : '';
+  const script = `Start-Process -FilePath ${quote(exe)}${argList} -Verb RunAs`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  setTimeout(() => app.quit(), 500);
 }
 
 /** 启动项目前确保本机数据库服务已运行（容器数据库交给 docker compose）。 */
@@ -166,6 +185,36 @@ function registerIpc() {
 
   handle('env:install', (id, options) => environment.installPlan(id, options || {}));
 
+  handle('issue:fix', async (id, payload) => {
+    const profile = store.find(id);
+    if (!profile) throw new Error('项目不存在，可能已被删除');
+    const action = payload && payload.action;
+
+    if (action === 'kill-port') {
+      const port = Number.parseInt(String(payload.port ?? ''), 10);
+      if (!port) throw new Error('没有拿到端口号');
+      const owners = await findPortOwners(port);
+      if (!owners.ok) throw new Error(owners.error);
+      if (owners.pids.length === 0) {
+        return { fixed: false, retry: false, message: `没有找到占用 ${port} 的进程，可能已经自行释放` };
+      }
+      const results = await killPids(owners.pids);
+      const killed = results.filter((item) => item.ok).map((item) => item.pid);
+      if (killed.length === 0) {
+        const detail = results.map((item) => `${item.pid}: ${item.message || '失败'}`).join('；');
+        throw new Error(`结束占用 ${port} 的进程失败：${detail}`);
+      }
+      return { fixed: true, retry: true, message: `已结束占用 ${port} 的进程：${killed.join(', ')}` };
+    }
+
+    if (action === 'elevate') {
+      relaunchAsAdmin();
+      return { fixed: true, retry: false, message: '正在以管理员身份重启 DevDock…' };
+    }
+
+    throw new Error('不支持的操作');
+  });
+
   handle('env:residue', (dir) => {
     const target = path.resolve(String(dir || ''));
     if (!dir || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) return [];
@@ -226,6 +275,7 @@ function registerIpc() {
 
   handle('env:start', (id) => {
     environment.start(id).catch((error) => {
+      if (error && error.code === 'self-launch') return;
       broadcast('state:event', { type: 'error', projectId: id, message: error.message });
     });
     return { starting: true };
@@ -322,7 +372,31 @@ function bootstrap() {
       if (payload.kind === 'setup' && payload.running === false && payload.exitCode === 0) {
         store.markSetup(payload.projectId);
       }
-      broadcast('state:event', { type: 'running', ...payload });
+
+      const { tail, ...visible } = payload;
+      broadcast('state:event', { type: 'running', ...visible });
+
+      if (payload.kind === 'start' && payload.running === false && !payload.stopped) {
+        const profile = store.find(payload.projectId);
+        const service =
+          profile && Array.isArray(profile.services)
+            ? profile.services.find((item) => item.id === payload.serviceId)
+            : null;
+        const diagnosis = diagnoseStartFailure({
+          exitCode: payload.exitCode,
+          elapsedMs: payload.elapsedMs,
+          tail,
+          command: payload.command,
+          port: service ? service.port : null,
+          serviceName: service ? service.name : payload.serviceId,
+        });
+        broadcast('state:event', {
+          type: 'start-failed',
+          projectId: payload.projectId,
+          serviceId: payload.serviceId,
+          diagnosis,
+        });
+      }
     },
   });
   environment = new Environment({
@@ -335,6 +409,12 @@ function bootstrap() {
       return secret ? secret.envVars : [];
     },
     ensureDatabase,
+    checkSelfLaunch: (profile, service) =>
+      detectSelfLaunch({
+        cwd: service.cwd && service.cwd !== '.' ? path.resolve(profile.dir, service.cwd) : profile.dir,
+        command: service.startCommand,
+        appPath: app.getAppPath(),
+      }),
   });
 
   registerIpc();

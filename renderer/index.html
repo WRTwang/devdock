@@ -350,6 +350,31 @@
       </form>
     </dialog>
 
+    <dialog class="editor dialog-narrow" id="issue-dialog">
+      <form id="issue-form" novalidate>
+        <header class="editor-head">
+          <h2 id="issue-title">启动失败</h2>
+          <button type="button" class="btn btn-ghost btn-icon" id="issue-close" aria-label="关闭">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="editor-body">
+          <p class="issue-message" id="issue-message"></p>
+          <ul class="issue-suggestions" id="issue-suggestions"></ul>
+          <pre class="issue-excerpt" id="issue-excerpt" hidden></pre>
+        </div>
+        <footer class="editor-foot">
+          <button type="button" class="link-btn" id="btn-issue-log">打开日志文件</button>
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-ghost" id="btn-issue-close">关闭</button>
+          <button type="button" class="btn btn-danger" id="btn-issue-elevate" hidden>以管理员身份重启</button>
+          <button type="button" class="btn btn-primary" id="btn-issue-fix" hidden>自动修复并重试</button>
+        </footer>
+      </form>
+    </dialog>
+
     <div class="toasts" id="toasts"></div>
     <script src="../electron/services.js"></script>
     <script src="service-form.js"></script>

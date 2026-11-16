@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('devdock', {
   pickDir: () => invoke('dialog:pickDir'),
   inspectEnv: (id) => invoke('env:inspect', id),
   installEnv: (id, options) => invoke('env:install', id, options),
+  fixIssue: (id, payload) => invoke('issue:fix', id, payload),
   envResidue: (dir) => invoke('env:residue', dir),
   prepareDb: (id, options) => invoke('db:prepare', id, options),
   activate: (id) => invoke('env:activate', id),

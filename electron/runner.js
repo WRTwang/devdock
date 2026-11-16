@@ -137,6 +137,7 @@ class Runner {
       startedAt: Date.now(),
       logFile,
       command,
+      tail: '',
     };
     this.#entries(profile.id, true).add(entry);
 
@@ -144,6 +145,7 @@ class Runner {
 
     const forward = (streamName) => (buffer) => {
       const text = buffer.toString('utf8');
+      entry.tail = `${entry.tail}${text}`.slice(-12000);
       stream.write(text);
       this.#emit(profile.id, serviceId, kind, streamName, text, logFile);
     };
@@ -183,6 +185,9 @@ class Runner {
         running: this.isRunning(profile.id),
         exitCode: code,
         stopped: entry.stopping,
+        elapsedMs: Date.now() - entry.startedAt,
+        command: entry.command,
+        tail: entry.tail,
       });
     });
 

@@ -20,6 +20,7 @@ class Environment {
     secretVars = () => [],
     ensureDatabase = async () => null,
     inspectEnv = envcheck.inspectProject,
+    checkSelfLaunch = () => null,
   }) {
     this.store = store;
     this.runner = runner;
@@ -29,6 +30,7 @@ class Environment {
     this.secretVars = secretVars;
     this.ensureDatabase = ensureDatabase;
     this.inspectEnv = inspectEnv;
+    this.checkSelfLaunch = checkSelfLaunch;
   }
 
   get activeId() {
@@ -152,6 +154,16 @@ class Environment {
     }
 
     await this.activate(projectId, { reason: 'start' });
+
+    for (const service of services) {
+      const blocked = this.checkSelfLaunch(profile, service);
+      if (blocked) {
+        this.#emit('start-blocked', { projectId, serviceId: service.id, diagnosis: blocked });
+        const error = new Error(`${blocked.title}：${blocked.message}`);
+        error.code = blocked.id;
+        throw error;
+      }
+    }
 
     if (profile.db) {
       try {
