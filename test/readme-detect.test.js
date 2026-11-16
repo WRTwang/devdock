@@ -125,3 +125,44 @@ test('diff 代码块不会被当成命令', () => {
   const result = extractReadmeCommands(markdown);
   assert.equal(result.found, false);
 });
+
+test('识别带虚拟环境解释器的命令', () => {
+  const fence = '```';
+  const markdown = [
+    fence + 'powershell',
+    String.raw`.\venv\Scripts\python.exe -m pip install -r requirements.txt`,
+    String.raw`.\venv\Scripts\python.exe manage.py runserver 0.0.0.0:8001`,
+    fence,
+  ].join('\n');
+
+  const result = extractReadmeCommands(markdown);
+  assert.equal(result.setupCommand, String.raw`.\venv\Scripts\python.exe -m pip install -r requirements.txt`);
+  assert.equal(result.startCommand, String.raw`.\venv\Scripts\python.exe manage.py runserver 0.0.0.0:8001`);
+  assert.equal(result.port, 8001);
+});
+
+test('去掉 PowerShell 提示符前缀', () => {
+  const fence = '```';
+  const markdown = [fence + 'powershell', 'PS D:\\code\\app> npm run dev', fence].join('\n');
+  const result = extractReadmeCommands(markdown);
+  assert.equal(result.startCommand, 'npm run dev');
+});
+
+test('python -m pip install 归一化为安装命令', () => {
+  const fence = '```';
+  const markdown = [fence + 'bash', 'python -m pip install -r requirements.txt', fence].join('\n');
+  const result = extractReadmeCommands(markdown);
+  assert.equal(result.setupCommand, 'python -m pip install -r requirements.txt');
+});
+
+test('manage.py migrate 不会被当成启动命令', () => {
+  const fence = '```';
+  const markdown = [
+    fence + 'bash',
+    'python manage.py migrate',
+    'python manage.py runserver 0.0.0.0:8001',
+    fence,
+  ].join('\n');
+  const result = extractReadmeCommands(markdown);
+  assert.equal(result.startCommand, 'python manage.py runserver 0.0.0.0:8001');
+});

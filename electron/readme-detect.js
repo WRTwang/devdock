@@ -17,7 +17,8 @@ const START_PATTERNS = [
   /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b/,
   /^(?:uvicorn|gunicorn|hypercorn|flask)\s+/,
   /^python3?\s+-m\s+(?:uvicorn|flask|django|fastapi)\b/,
-  /^python3?\s+(?:manage\.py|app\.py|main\.py|server\.py)\b/,
+  /^python3?\s+manage\.py\s+runserver\b/,
+  /^python3?\s+(?:app|main|server)\.py\b/,
   /^cargo\s+run\b/,
   /^go\s+run\b/,
   /^dotnet\s+run\b/,
@@ -29,13 +30,46 @@ const START_PATTERNS = [
   /^(?:mvn|\.\/gradlew|gradlew\.bat)\s+(?:spring-boot:run|bootRun)\b/,
 ];
 
-const PORT_PATTERNS = [/localhost:(\d{2,5})/i, /127\.0\.0\.1:(\d{2,5})/, /--port[= ](\d{2,5})/];
+const PORT_PATTERNS = [
+  /(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})/i,
+  /--port[= ](\d{2,5})/,
+];
 
 const SKIP_LANGUAGES = new Set(['diff', 'patch', 'text', 'plain', 'log']);
 
+/** 去掉 PowerShell / bash 提示符前缀。 */
+function stripPrompt(line) {
+  return line
+    .replace(/^(?:PS\s+[^>]*?>|>|\$|λ|➜)\s*/, '')
+    .trim();
+}
+
+/**
+ * 把「带路径的解释器 + 参数」归一化成通用命令，仅用于匹配。
+ * 例如 .\venv\Scripts\python.exe manage.py runserver → python manage.py runserver
+ */
+function normalizeForMatch(command) {
+  const match = /^(?:"([^"]+)"|(\S+))\s+([\s\S]*)$/.exec(command);
+  if (!match) return command;
+
+  const exe = match[1] || match[2] || '';
+  const base = exe.split(/[\\/]/).pop().toLowerCase();
+  if (!/^(python|python3|py)(\.exe)?$/.test(base)) return command;
+
+  const args = (match[3] || '').trim();
+  if (/^-m\s+pip\s+install\b/i.test(args)) {
+    return args.replace(/^-m\s+pip\s+install\s*/i, 'pip install ');
+  }
+  if (/^-m\s+(uvicorn|flask|django|fastapi)\b/i.test(args)) return args;
+  if (/^manage\.py\b/i.test(args)) return `python ${args}`;
+  if (/^(app|main|server)\.py\b/i.test(args)) return `python ${args}`;
+  return command;
+}
+
 function classify(command) {
-  if (SETUP_PATTERNS.some((pattern) => pattern.test(command))) return 'setup';
-  if (START_PATTERNS.some((pattern) => pattern.test(command))) return 'start';
+  const normalized = normalizeForMatch(command);
+  if (SETUP_PATTERNS.some((pattern) => pattern.test(normalized))) return 'setup';
+  if (START_PATTERNS.some((pattern) => pattern.test(normalized))) return 'start';
   return null;
 }
 
@@ -88,7 +122,8 @@ function extractReadmeCommands(markdown) {
     for (let i = block.start; i < block.end; i += 1) {
       const line = lines[i].trim();
       if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-      const command = line.replace(/^\$\s+/, '');
+      const command = stripPrompt(line);
+      if (!command) continue;
       const kind = classify(command);
       if (!kind) continue;
 
