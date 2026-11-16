@@ -218,7 +218,7 @@ test('README 的 venv+pip 命令并回 Python 项，不再重复成「README 安
   assert.equal(python.status, 'ok');
   assert.equal(
     python.install[0],
-    '.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple',
+    `"${path.join('venv', 'Scripts', 'python.exe')}" -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple`,
   );
   assert.match(python.evidence, /README\.md/);
 });
@@ -252,10 +252,8 @@ test('README 指向尚未创建的 venv 时，先建环境再执行 README 命�
   assert.equal(result.items.some((item) => item.id === 'readme'), false);
   const python = result.items.find((item) => item.id === 'python');
   assert.equal(python.status, 'missing');
-  assert.deepEqual(python.install, [
-    'python -m venv venv',
-    '.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt',
-  ]);
+  assert.equal(python.install[0], 'python -m venv venv');
+  assert.match(python.install[1], /^\(.*Scripts.*python\.exe.*\|\|.*bin.*python\.exe/);
 });
 
 test('README 的 npm 安装命令并回 Node 项且优先', async () => {
@@ -303,6 +301,115 @@ test('removeEnvs 只删白名单内容且能报告删掉什么', () => {
   assert.deepEqual(removed.sort(), ['.devdock', '.venv', 'devdock.cmd', 'node_modules'].sort());
   assert.equal(fs.existsSync(path.join(dir, 'src/app.js')), true);
   assert.equal(fs.existsSync(path.join(dir, '.venv')), false);
+});
+
+test('删除环境会递归清理子目录里的环境、缓存与构建产物', () => {
+  const dir = tempProject({
+    'backend/.venv/pyvenv.cfg': '',
+    'backend/__pycache__/a.pyc': '',
+    'web/node_modules/pkg/index.js': '',
+    'web/dist/app.js': '',
+    'src/main.js': 'console.log(1)',
+  });
+  const norm = (items) => items.map((item) => item.name.split(path.sep).join('/'));
+  const found = norm(envcheck.listEnvResidue(dir));
+  assert.equal(found.includes('backend/.venv'), true);
+  assert.equal(found.includes('backend/__pycache__'), true);
+  assert.equal(found.includes('web/node_modules'), true);
+  assert.equal(found.includes('web/dist'), true);
+
+  const envOnly = norm(envcheck.removeEnvs(dir, { includeBuild: false }).map((name) => ({ name })));
+  assert.equal(envOnly.includes('backend/.venv'), true);
+  assert.equal(envOnly.includes('web/node_modules'), true);
+  assert.equal(fs.existsSync(path.join(dir, 'web/dist')), true);
+  assert.equal(fs.existsSync(path.join(dir, 'backend/__pycache__')), true);
+
+  envcheck.removeEnvs(dir);
+  assert.equal(fs.existsSync(path.join(dir, 'web/dist')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'backend/__pycache__')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'src/main.js')), true);
+});
+
+test('.env.example 存在但没有 .env 时提示复制，并进入安装计划', async () => {
+  const dir = tempProject({
+    'package.json': JSON.stringify({ scripts: { dev: 'vite' } }),
+    '.env.example': 'API_URL=http://localhost:8000\n',
+  });
+  const result = await envcheck.inspectProject(dir, { exec: NODE_OK });
+  const item = result.items.find((entry) => entry.id === 'envfile');
+  assert.ok(item);
+  assert.equal(item.status, 'missing');
+  assert.deepEqual(item.actions[0], { kind: 'copy-env', from: '.env.example', to: '.env' });
+
+  const plan = envcheck.buildPlan(result);
+  assert.equal(plan.steps.some((step) => step.action && step.action.kind === 'copy-env'), true);
+});
+
+test('monorepo 根目录没有清单时分别体检子项目，并保留执行目录', async () => {
+  const dir = tempProject({
+    'backend/requirements.txt': 'flask\n',
+    'backend/app.py': 'print("hi")',
+    'web/package.json': JSON.stringify({ scripts: { dev: 'vite' }, devDependencies: { vite: '^5' } }),
+  });
+  const result = await envcheck.inspectProject(dir, {
+    exec: fakeExec({ node: 'v20.11.1', npm: '10.2.4', python: 'Python 3.12.4' }),
+  });
+  const backend = result.items.find((entry) => entry.id === 'backend:python');
+  const web = result.items.find((entry) => entry.id === 'web:node');
+  assert.ok(backend);
+  assert.ok(web);
+  assert.equal(backend.cwd, 'backend');
+  assert.equal(web.cwd, 'web');
+
+  const plan = envcheck.buildPlan(result);
+  const backendStep = plan.steps.find((step) => step.itemId === 'backend:python');
+  const webStep = plan.steps.find((step) => step.itemId === 'web:node');
+  assert.equal(backendStep.cwd, 'backend');
+  assert.equal(webStep.cwd, 'web');
+});
+
+test('MSYS2 风格的 .venv/bin/python.exe 也能识别并使用', async () => {
+  const dir = tempProject({
+    'requirements.txt': 'flask\n',
+    '.venv/bin/python.exe': '',
+  });
+  const venvPython = path.join(dir, '.venv', 'bin', 'python.exe');
+  const exec = fakeExec({
+    python: 'Python 3.14.2',
+    [`${venvPython} -m pip list --format=json`]: JSON.stringify([{ name: 'flask' }]),
+  });
+  const result = await envcheck.inspectProject(dir, { exec });
+  const python = result.items.find((item) => item.id === 'python');
+  assert.equal(python.status, 'ok');
+  assert.match(python.detail, /\.venv 已就绪/);
+});
+
+test('MSYS2 Python 优先用 py -3 创建 Windows 原生 venv', async () => {
+  const dir = tempProject({ 'requirements.txt': 'flask\n' });
+  const exec = fakeExec({
+    python: 'Python 3.14.2',
+    'python -c import sys; print(sys.executable)': 'D:\\software\\msys2\\ucrt64\\bin\\python.exe',
+    'py -3 --version': 'Python 3.12.5',
+  });
+  const result = await envcheck.inspectProject(dir, { exec });
+  const python = result.items.find((item) => item.id === 'python');
+  assert.equal(python.install[0].startsWith('py -3 -m venv'), true);
+  assert.match(python.install[0], /Scripts/);
+});
+
+test('从 .env.example 原样复制的 .env 会随环境删除，改过的保留', () => {
+  const copied = tempProject({ '.env.example': 'A=1\n', '.env': 'A=1\n' });
+  const edited = tempProject({ '.env.example': 'A=1\n', '.env': 'A=2\n' });
+
+  const found = envcheck.listEnvResidue(copied);
+  assert.equal(found.some((item) => item.kind === 'envfile' && item.name === '.env'), true);
+  envcheck.removeEnvs(copied);
+  assert.equal(fs.existsSync(path.join(copied, '.env')), false);
+
+  const kept = envcheck.listEnvResidue(edited);
+  assert.equal(kept.some((item) => item.name === '.env'), false);
+  envcheck.removeEnvs(edited);
+  assert.equal(fs.existsSync(path.join(edited, '.env')), true);
 });
 
 test('parseWindowsServices 解析 sc 输出', () => {

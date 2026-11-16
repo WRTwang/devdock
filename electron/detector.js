@@ -58,6 +58,39 @@ function findReadme(dir) {
   }
 }
 
+/** 找 Python 依赖清单：根目录 requirements.txt，或 requirements/ 下常见的 base/dev。 */
+function findRequirementsFile(dir) {
+  if (exists(dir, 'requirements.txt')) return 'requirements.txt';
+  try {
+    const files = fs
+      .readdirSync(path.join(dir, 'requirements'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.txt$/i.test(entry.name))
+      .map((entry) => entry.name);
+    if (files.length > 0) {
+      const preferred = ['base.txt', 'requirements.txt', 'prod.txt', 'production.txt', 'dev.txt', 'development.txt'].find(
+        (name) => files.includes(name),
+      );
+      return `requirements/${preferred || files.sort()[0]}`;
+    }
+  } catch {
+    /* 没有 requirements 目录 */
+  }
+  return null;
+}
+
+/** Procfile 的 web 进程通常是项目真正的启动命令（Heroku 风格仓库）。 */
+function readProcfileCommand(dir) {
+  const candidates = process.platform === 'win32' ? ['Procfile.windows', 'Procfile'] : ['Procfile'];
+  for (const file of candidates) {
+    const text = readText(dir, file);
+    for (const line of text.split(/\r?\n/)) {
+      const match = /^web:\s*(.+)$/i.exec(line.trim());
+      if (match) return match[1].trim();
+    }
+  }
+  return '';
+}
+
 function roleForImage(image) {
   const value = String(image || '').toLowerCase();
   return DATABASE_IMAGE_HINTS.some((hint) => value.includes(hint)) ? 'database' : 'app';
@@ -335,12 +368,102 @@ function detectNode(dir, result) {
   return true;
 }
 
+/**
+ * 根目录没有项目清单时，往下一层找常见的前后端子目录（backend/ + web/ 这类）。
+ * 只做一层，避免扫全仓库。
+ */
+function detectSubprojects(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const skip = new Set([
+    'node_modules',
+    '.git',
+    '.venv',
+    'venv',
+    'env',
+    'dist',
+    'build',
+    'target',
+    'coverage',
+    '.next',
+    '__pycache__',
+  ]);
+  const used = new Set();
+  const services = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const name = entry.name;
+    if (name.startsWith('.') || skip.has(name.toLowerCase())) continue;
+    if (services.length >= 8) break;
+
+    const abs = path.join(dir, name);
+    const id = workspaceServiceId(name, used);
+
+    if (exists(abs, 'package.json')) {
+      const pkg = readJson(abs, 'package.json') || {};
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+      const script = ['dev', 'start', 'serve'].find((key) => scripts[key]);
+      const pm = packageManagerFor(abs);
+      services.push({
+        id,
+        name: typeof pkg.name === 'string' && pkg.name.trim() ? pkg.name.trim() : name,
+        role: roleForWorkspacePackage(name, name, deps),
+        cwd: name,
+        setupCommand: `${pm} install`,
+        startCommand: script ? (pm === 'npm' ? `npm run ${script}` : `${pm} run ${script}`) : '',
+        port: null,
+        envVars: [],
+        dependsOn: [],
+      });
+      continue;
+    }
+
+    const reqFile = findRequirementsFile(abs);
+    const isPython =
+      Boolean(reqFile) || exists(abs, 'pyproject.toml') || exists(abs, 'Pipfile') || exists(abs, 'manage.py') || exists(abs, 'setup.py');
+    if (!isPython) continue;
+
+    const setupCommand = reqFile
+      ? `pip install -r ${reqFile}`
+      : exists(abs, 'uv.lock')
+        ? 'uv sync'
+        : 'pip install -e .';
+    let startCommand = '';
+    if (exists(abs, 'manage.py')) startCommand = 'python manage.py runserver';
+    else if (exists(abs, 'app.py')) startCommand = 'python app.py';
+    else if (exists(abs, 'main.py')) startCommand = 'python main.py';
+
+    services.push({
+      id,
+      name,
+      role: 'backend',
+      cwd: name,
+      setupCommand,
+      startCommand,
+      port: null,
+      envVars: [],
+      dependsOn: [],
+    });
+  }
+
+  return services;
+}
+
 function detectPython(dir, result) {
-  const hasRequirements = exists(dir, 'requirements.txt');
+  const reqFile = findRequirementsFile(dir);
+  const hasRequirements = Boolean(reqFile);
   const hasPyproject = exists(dir, 'pyproject.toml');
   const hasPipfile = exists(dir, 'Pipfile');
   const hasManage = exists(dir, 'manage.py');
-  if (!hasRequirements && !hasPyproject && !hasPipfile && !hasManage) return false;
+  const hasSetupPy = exists(dir, 'setup.py');
+  if (!hasRequirements && !hasPyproject && !hasPipfile && !hasManage && !hasSetupPy) return false;
 
   result.runtime = 'Python';
   const pyproject = readText(dir, 'pyproject.toml');
@@ -352,8 +475,10 @@ function detectPython(dir, result) {
   } else if (hasPipfile) {
     result.setupCommand = 'pipenv install';
   } else if (hasRequirements) {
-    result.setupCommand = 'pip install -r requirements.txt';
+    result.setupCommand = `pip install -r ${reqFile}`;
   } else if (hasPyproject) {
+    result.setupCommand = 'pip install -e .';
+  } else if (hasSetupPy) {
     result.setupCommand = 'pip install -e .';
   }
 
@@ -526,6 +651,16 @@ function detectProject(dir) {
     }
   }
 
+  // 根目录识别不出项目、也没有 workspace / compose 时，往下一层找前后端子项目
+  if (result.services.length === 0 && !result.runtime) {
+    const subprojects = detectSubprojects(dir);
+    if (subprojects.length > 0) {
+      result.services = subprojects;
+      result.runtime = 'Multi-project';
+      result.notes.push(`识别到 ${subprojects.length} 个子项目`);
+    }
+  }
+
   // 结构识别出命令但没有服务时，补一个 main 服务，供后续 README 覆盖与编排使用
   if (result.services.length === 0 && (result.startCommand || result.setupCommand)) {
     result.services = [
@@ -574,10 +709,37 @@ function detectProject(dir) {
     }
   }
 
+  // Procfile 比泛化的目录结构更权威；README 明确写了启动命令时仍以 README 为准。
+  const procCommand = readProcfileCommand(dir);
+  if (procCommand && (!result.startCommand || result.sources.start === 'structure')) {
+    const fallbackPort = (result.readme && result.readme.port) || 5000;
+    const resolved = procCommand.replace(/%PORT%|\$\{?PORT\}?/gi, String(fallbackPort));
+    result.startCommand = resolved;
+    if (result.services.length === 1) {
+      result.services[0].startCommand = resolved;
+      if (/%PORT%|\$\{?PORT\}?/i.test(procCommand) && !result.services[0].port) {
+        result.services[0].port = fallbackPort;
+      }
+    }
+    result.sources.start = 'procfile';
+    result.notes.push('启动命令来自 Procfile');
+  }
+
   if (!result.runtime) {
     result.notes.push('未识别项目类型，请手动填写安装与启动命令');
   }
   return result;
 }
 
-module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage, findReadme, findComposeFile };
+module.exports = {
+  detectProject,
+  detectWorkspaces,
+  detectSubprojects,
+  parseComposeServices,
+  parsePort,
+  roleForImage,
+  findReadme,
+  findComposeFile,
+  findRequirementsFile,
+  readProcfileCommand,
+};

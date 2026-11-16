@@ -1,10 +1,17 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
 const dotenv = require('./dotenv');
 const { resolveServices, sortServices } = require('./services');
 const probe = require('./probe');
 const envcheck = require('./envcheck');
+const { excerptOf } = require('./diagnose');
+
+function tailHint(tail, limit = 5) {
+  const lines = excerptOf(tail, limit);
+  return lines.length > 0 ? `\n${lines.join('\n')}` : '';
+}
 
 /**
  * 环境编排：保证同一时间只有一个活跃项目。
@@ -95,7 +102,11 @@ class Environment {
         reject(error);
         return;
       }
-      result.child.once('exit', (code) => resolve(code));
+      result.child.once('exit', (code) => {
+        const serviceId = profile.serviceId || 'main';
+        const tail = typeof this.runner.tail === 'function' ? this.runner.tail(profile.id, serviceId) : '';
+        resolve({ code, tail });
+      });
     });
   }
 
@@ -122,13 +133,45 @@ class Environment {
     };
   }
 
+  /**
+   * 项目里有 venv 时，把 python / pip / uvicorn 这类命令切到 venv 解释器，
+   * 否则用户启动的仍然是系统 Python（依赖装在 venv 里会找不到）。
+   */
+  commandFor(profile, service, command) {
+    const text = String(command || '');
+    if (!text.trim()) return command;
+    if (/[\\/](?:Scripts|bin)[\\/]python(?:3)?(?:\.exe)?/i.test(text)) return command;
+
+    const dir = service && service.cwd && service.cwd !== '.' ? path.resolve(profile.dir, service.cwd) : profile.dir;
+    const venv = envcheck.findVenv(dir) || envcheck.findVenv(profile.dir);
+    if (!venv) return command;
+
+    const python = `"${venv.python}"`;
+    const pip = /^pip3?\s+(.*)$/i.exec(text);
+    if (pip) return `${python} -m pip ${pip[1]}`;
+    if (/^(?:python|python3)(?:\.exe)?\s+/i.test(text)) {
+      return text.replace(/^(?:python|python3)(?:\.exe)?\s+/i, `${python} `);
+    }
+    if (/^py(?:\.exe)?\s+/i.test(text)) return text.replace(/^py(?:\.exe)?\s+/i, `${python} `);
+
+    const module = /^(uvicorn|gunicorn|hypercorn|flask|celery)\s+(.*)$/i.exec(text);
+    if (module) return `${python} -m ${module[1]} ${module[2]}`;
+    return command;
+  }
+
   async #setupServices(profile, services) {
     for (const service of services) {
       if (!service.setupCommand || !service.setupCommand.trim()) continue;
       this.#emit('phase', { projectId: profile.id, phase: 'setup', message: `正在安装 ${service.name} 依赖…` });
-      const code = await this.execAndWait(this.derive(profile, service), service.setupCommand, 'setup');
-      if (code !== 0) {
-        throw new Error(`环境搭建失败：${service.name} 依赖安装失败（退出码 ${code}）`);
+      const outcome = await this.execAndWait(
+        this.derive(profile, service),
+        this.commandFor(profile, service, service.setupCommand),
+        'setup',
+      );
+      if (outcome.code !== 0) {
+        throw new Error(
+          `环境搭建失败：${service.name} 依赖安装失败（退出码 ${outcome.code}）${tailHint(outcome.tail)}`,
+        );
       }
     }
   }
@@ -191,7 +234,10 @@ class Environment {
           continue;
         }
 
-        this.runner.exec(this.derive(profile, service), { command: service.startCommand, kind: 'start' });
+        this.runner.exec(this.derive(profile, service), {
+          command: this.commandFor(profile, service, service.startCommand),
+          kind: 'start',
+        });
         started.push(service.id);
 
         if (service.role === 'database') {
@@ -251,11 +297,28 @@ class Environment {
     }
 
     await this.activate(projectId, { reason: 'setup' });
-    const context = this.derive(profile, { id: 'env', cwd: '.', setupCommand: '', startCommand: '', envVars: [] });
     this.#emit('phase', { projectId, phase: 'setup', message: `开始安装 ${plan.steps.length} 个环境项…` });
 
-    this.#runSteps(projectId, context, plan.steps)
-      .then(() => {
+    this.#runSteps(projectId, profile, plan.steps)
+      .then(async () => {
+        const after = await this.inspectEnv(profile.dir);
+        const remaining = (after.items || []).filter(
+          (item) => item.status !== 'ok' && item.id !== 'database' && item.id !== 'envfile' && item.id !== 'docker',
+        );
+        if (remaining.length > 0) {
+          const labels = remaining.map((item) => `${item.label}（${item.detail || item.status}）`).join('；');
+          this.#emit('setup-incomplete', {
+            projectId,
+            message: `安装结束，但还有 ${remaining.length} 项未就绪：${labels}`,
+            items: remaining.map((item) => ({
+              id: item.id,
+              label: item.label,
+              status: item.status,
+              detail: item.detail,
+            })),
+          });
+          return;
+        }
         this.store.markSetup(projectId);
         this.#emit('setup-done', { projectId });
       })
@@ -266,18 +329,49 @@ class Environment {
     return { steps: plan.steps.map((step) => step.title), started: true };
   }
 
-  async #runSteps(projectId, context, steps) {
+  async #runSteps(projectId, profile, steps) {
     for (const step of steps) {
       this.#emit('phase', { projectId, phase: 'setup', message: step.title });
-      const code = await this.execAndWait(context, step.command, 'setup');
-      if (code !== 0) throw new Error(`${step.title} 失败（退出码 ${code}）`);
+      const context = this.derive(profile, {
+        id: 'env',
+        cwd: step.cwd || '.',
+        setupCommand: '',
+        startCommand: '',
+        envVars: [],
+      });
+
+      if (step.action && step.action.kind === 'copy-env') {
+        const from = path.resolve(context.dir, step.action.from);
+        const to = path.resolve(context.dir, step.action.to);
+        if (!fs.existsSync(from)) throw new Error(`${step.title} 失败：找不到 ${step.action.from}`);
+        if (fs.existsSync(to)) continue;
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(from, to);
+        this.onLog({
+          projectId,
+          serviceId: 'env',
+          kind: 'setup',
+          stream: 'meta',
+          chunk: `[DevDock] 已复制 ${step.action.from} → ${step.action.to}\n`,
+          ts: Date.now(),
+          logFile: null,
+        });
+        continue;
+      }
+
+      if (!step.command) continue;
+      const outcome = await this.execAndWait(context, step.command, 'setup');
+      if (outcome.code !== 0) {
+        throw new Error(`${step.title} 失败（退出码 ${outcome.code}）${tailHint(outcome.tail)}`);
+      }
     }
   }
 
   /**
-   * 删除项目档案。removeEnv 为 true 时顺带删除项目内的环境与 DevDock 残留。
+   * 删除项目档案。removeEnv 为 true 时顺带删除项目内的环境与 DevDock 残留；
+   * includeBuild 控制是否连缓存 / 构建产物一起删。
    */
-  async remove(projectId, { removeEnv = false } = {}) {
+  async remove(projectId, { removeEnv = false, includeBuild = true } = {}) {
     const profile = this.store.find(projectId);
     let removedEnvs = [];
     if (profile) {
@@ -285,7 +379,7 @@ class Environment {
       this.#restoreEnv(profile);
       if (removeEnv) {
         try {
-          removedEnvs = envcheck.removeEnvs(profile.dir);
+          removedEnvs = envcheck.removeEnvs(profile.dir, { includeBuild });
         } catch (error) {
           this.#emit('error', { projectId, message: `删除环境失败：${error.message}` });
         }

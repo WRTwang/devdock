@@ -3,9 +3,9 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const { Store } = require('./store');
-const { detectProject } = require('./detector');
+const { detectProject, findComposeFile } = require('./detector');
 const { Runner } = require('./runner');
 const { Environment } = require('./environment');
 const envcheck = require('./envcheck');
@@ -60,6 +60,28 @@ function relaunchAsAdmin() {
   });
   child.unref();
   setTimeout(() => app.quit(), 500);
+}
+
+/** 删除项目前停掉它自己的 docker compose 容器（保留数据卷）。 */
+function composeDown(dir) {
+  const composeFile = findComposeFile(dir);
+  if (!composeFile) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(
+      'docker',
+      ['compose', '-f', composeFile, 'down', '--remove-orphans'],
+      { cwd: dir, windowsHide: true, timeout: 120000 },
+      (error, stdout, stderr) => {
+        const output = `${stdout || ''}\n${stderr || ''}`.trim();
+        resolve({
+          ok: !error,
+          message: error
+            ? output.split(/\r?\n/).filter(Boolean).slice(-3).join(' ') || error.message
+            : output.split(/\r?\n/).filter(Boolean).slice(-3).join(' '),
+        });
+      },
+    );
+  });
 }
 
 /** 启动项目前确保本机数据库服务已运行（容器数据库交给 docker compose）。 */
@@ -164,9 +186,19 @@ function registerIpc() {
   });
 
   handle('profiles:delete', async (id, options) => {
-    const result = await environment.remove(id, options || {});
+    const opts = options && typeof options === 'object' ? options : {};
+    const profile = store.find(id);
+    let docker = null;
+    if (profile && opts.removeEnv && opts.compose !== false) {
+      try {
+        docker = await composeDown(profile.dir);
+      } catch (error) {
+        docker = { ok: false, message: error.message };
+      }
+    }
+    const result = await environment.remove(id, opts);
     dbSecrets.delete(id);
-    return result;
+    return { ...result, docker };
   });
 
   handle('profiles:detect', (dir) => detectProject(dir));
@@ -217,8 +249,10 @@ function registerIpc() {
 
   handle('env:residue', (dir) => {
     const target = path.resolve(String(dir || ''));
-    if (!dir || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) return [];
-    return envcheck.listEnvResidue(target);
+    if (!dir || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+      return { items: [], compose: null };
+    }
+    return { items: envcheck.listEnvResidue(target), compose: findComposeFile(target) };
   });
 
   handle('db:prepare', async (id, input) => {

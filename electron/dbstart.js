@@ -58,9 +58,25 @@ const ENGINE_HINTS = [
   ['mongo', /mongo(?:db)?|27017/i],
 ];
 
+const CONNECTION_HINTS = [
+  ['postgres', /(?:postgres|postgresql):\/\//i],
+  ['mysql', /mysql:\/\//i],
+  ['redis', /redis:\/\//i],
+  ['mongo', /mongodb(?:\+srv)?:\/\//i],
+];
+
 function engineFromText(text) {
   const source = String(text || '');
   for (const [engine, pattern] of ENGINE_HINTS) {
+    if (pattern.test(source)) return engine;
+  }
+  return null;
+}
+
+/** 只认真正的连接串，避免 README 里顺带提一句 PostgreSQL 就误报数据库。 */
+function engineFromConnectionText(text) {
+  const source = String(text || '');
+  for (const [engine, pattern] of CONNECTION_HINTS) {
     if (pattern.test(source)) return engine;
   }
   return null;
@@ -150,7 +166,7 @@ async function detectDatabase({
   const engine =
     engineFromCompose(composeText) ||
     engineFromServices(services) ||
-    engineFromText(`${readmeText}\n${envText}`);
+    engineFromConnectionText(`${readmeText}\n${envText}`);
 
   if (!engine) return null;
   const spec = ENGINES[engine];

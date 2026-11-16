@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { detectProject, findReadme, findComposeFile } = require('./detector');
+const { detectProject, findReadme, findComposeFile, findRequirementsFile } = require('./detector');
 const { extractReadmeCommands, setupEcosystem } = require('./readme-detect');
 const tools = require('./tools');
 const dbstart = require('./dbstart');
@@ -14,7 +14,27 @@ const dbstart = require('./dbstart');
 
 const PY_VENV_DIRS = ['.venv', 'venv', 'env'];
 const ENV_CANDIDATES = [...PY_VENV_DIRS, 'node_modules'];
-const RESIDUE_CANDIDATES = ['.devdock', 'devdock.cmd', '.env.devdock.bak', '.pytest_cache', '__pycache__', '.mypy_cache'];
+const CACHE_CANDIDATES = [
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.tox',
+  '.nox',
+  '.turbo',
+  '.next',
+  '.nuxt',
+  '.parcel-cache',
+  '.eggs',
+];
+const BUILD_CANDIDATES = ['dist', 'build', 'target', 'coverage', 'htmlcov', '.gradle'];
+const RESIDUE_CANDIDATES = ['.devdock', 'devdock.cmd', '.env.devdock.bak', '.env.devdock.state.json', '.coverage'];
+
+const ENV_DIR_NAMES = new Set(ENV_CANDIDATES);
+const CACHE_DIR_NAMES = new Set(CACHE_CANDIDATES);
+const BUILD_DIR_NAMES = new Set(BUILD_CANDIDATES);
+const RESIDUE_DIR_NAMES = new Set(['.devdock']);
+const RESIDUE_FILE_NAMES = new Set(RESIDUE_CANDIDATES.filter((name) => name !== '.devdock'));
 
 function readText(dir, name) {
   try {
@@ -38,12 +58,21 @@ function exists(dir, name) {
 
 function findVenv(dir) {
   for (const name of PY_VENV_DIRS) {
-    const win = path.join(dir, name, 'Scripts', 'python.exe');
-    const posix = path.join(dir, name, 'bin', 'python');
-    if (fs.existsSync(win)) return { name, python: win };
-    if (fs.existsSync(posix)) return { name, python: posix };
+    const python = venvInterpreter(dir, name);
+    if (python) return { name, python };
   }
   return null;
+}
+
+/** Windows 原生 venv 用 Scripts，MSYS2 / Cygwin 的 Python 用 bin。 */
+function venvInterpreter(dir, name) {
+  const candidates = [
+    path.join(dir, name, 'Scripts', 'python.exe'),
+    path.join(dir, name, 'Scripts', 'python'),
+    path.join(dir, name, 'bin', 'python.exe'),
+    path.join(dir, name, 'bin', 'python'),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 function findCaseFile(dir, name) {
@@ -106,6 +135,16 @@ function parseRequiresPython(text) {
   return `${version[1]}.${version[2]}.0`;
 }
 
+/** .python-version / runtime.txt 里声明的 Python 版本。 */
+function parseVersionFile(dir) {
+  for (const name of ['.python-version', 'runtime.txt']) {
+    const text = readText(dir, name);
+    const match = /(\d+)\.(\d+)/.exec(text);
+    if (match) return `${match[1]}.${match[2]}.0`;
+  }
+  return null;
+}
+
 function nodePackageManager(dir, pkg) {
   if (pkg && typeof pkg.packageManager === 'string') {
     const name = pkg.packageManager.split('@')[0].trim();
@@ -161,15 +200,26 @@ function pythonBuilder(dir, probed, pyproject) {
   return { kind: 'venv', label: 'python -m venv', commands: [], requires: ['python'], consent: [], note: '' };
 }
 
-function venvInstallCommand(dir, venvName, hasRequirements, hasPyproject, exists = false) {
-  const pythonRelative = path.join(venvName, 'Scripts', 'python.exe');
+function venvInstallCommand(dir, { venv, creator, requirementsFile, hasPyproject, hasSetupPy }) {
+  const name = (venv && venv.name) || '.venv';
   const quote = (value) => `"${value}"`;
-  const create = `python -m venv ${venvName}`;
-  let install = '';
-  if (hasRequirements) install = `${quote(pythonRelative)} -m pip install -r requirements.txt`;
-  else if (hasPyproject) install = `${quote(pythonRelative)} -m pip install -e .`;
-  else install = `${quote(pythonRelative)} -m pip install --upgrade pip`;
-  return exists ? install : `${create} && ${install}`;
+  const pipArgs = requirementsFile
+    ? `-r ${requirementsFile}`
+    : hasPyproject || hasSetupPy
+      ? '-e .'
+      : '--upgrade pip';
+  const installWith = (relative) => `${quote(relative)} -m pip install ${pipArgs}`;
+
+  if (venv) return installWith(path.relative(dir, venv.python));
+
+  const create = `${creator || 'python'} -m venv ${name}`;
+  const scripts = path.join(name, 'Scripts', 'python.exe');
+  const bin = path.join(name, 'bin', 'python.exe');
+  const install =
+    creator === 'py -3'
+      ? installWith(scripts)
+      : `(${installWith(scripts)} || ${installWith(bin)})`;
+  return `${create} && ${install}`;
 }
 
 /** 从 README 命令里认出项目自带的虚拟环境目录名（.\venv\Scripts\python.exe → venv）。 */
@@ -182,20 +232,26 @@ function venvNameFromCommand(command) {
 }
 
 function venvAt(dir, name) {
-  return (
-    fs.existsSync(path.join(dir, name, 'Scripts', 'python.exe')) ||
-    fs.existsSync(path.join(dir, name, 'bin', 'python'))
+  return Boolean(venvInterpreter(dir, name));
+}
+
+/** 把命令里的 venv 解释器路径替换成实际存在的那个（Scripts / bin 都可能）。 */
+function replaceInterpreter(command, relativePython) {
+  const quoted = `"${relativePython}"`;
+  return String(command || '').replace(
+    /(["']?)([^"'\s]*[\\/](?:Scripts|bin)[\\/]python(?:3)?(?:\.exe)?)\1/i,
+    () => quoted,
   );
 }
 
 /** 把裸 pip / python -m pip 命令改写成使用项目虚拟环境，避免装到系统 Python。 */
-function rewriteToVenv(command, venvName) {
-  const python = `"${path.join(venvName, 'Scripts', 'python.exe')}"`;
+function rewriteToVenv(command, relativePython, requirementsFile) {
+  const python = `"${relativePython}"`;
   if (/^pip3?\s+/.test(command)) return `${python} -m ${command.replace(/^pip3?\s+/, 'pip ')}`;
   if (/^(?:python3?|py)(?:\.exe)?\s+-m\s+pip\b/i.test(command)) {
     return command.replace(/^(?:python3?|py)(?:\.exe)?\s+-m\s+/i, `${python} -m `);
   }
-  return `${python} -m pip install -r requirements.txt`;
+  return `${python} -m pip install -r ${requirementsFile || 'requirements.txt'}`;
 }
 
 /**
@@ -203,17 +259,28 @@ function rewriteToVenv(command, venvName) {
  * 已经指向项目内 venv 就直接用；没建 venv 就先建；裸 pip 则改写到 venv。
  * 避免出现「Python 依赖已就绪」旁边又挂一条「README 安装步骤 缺失」。
  */
-function mergeReadmeInstall(item, command, dir, readmeFile) {
+function mergeReadmeInstall(item, command, dir, readmeFile, creator = 'python', requirementsFile = null) {
   if (item.id === 'python') {
     const referenced = venvNameFromCommand(command);
-    if (referenced && venvAt(dir, referenced)) {
-      item.install = [command];
-    } else if (referenced) {
-      if (!findVenv(dir)) item.install = [`python -m venv ${referenced}`, command];
+    if (referenced) {
+      const interpreter = venvInterpreter(dir, referenced);
+      if (interpreter) {
+        item.install = [replaceInterpreter(command, path.relative(dir, interpreter))];
+      } else if (!findVenv(dir)) {
+        const scripts = path.join(referenced, 'Scripts', 'python.exe');
+        const bin = path.join(referenced, 'bin', 'python.exe');
+        const install =
+          creator === 'py -3'
+            ? replaceInterpreter(command, scripts)
+            : `(${replaceInterpreter(command, scripts)} || ${replaceInterpreter(command, bin)})`;
+        item.install = [`${creator} -m venv ${referenced}`, install];
+      }
     } else {
       const venv = findVenv(dir);
       const name = venv ? venv.name : '.venv';
-      item.install = venv ? [rewriteToVenv(command, name)] : [`python -m venv ${name}`, rewriteToVenv(command, name)];
+      const interpreter = venv ? path.relative(dir, venv.python) : path.join(name, 'Scripts', 'python.exe');
+      const rewritten = rewriteToVenv(command, interpreter, requirementsFile);
+      item.install = venv ? [rewritten] : [`${creator} -m venv ${name}`, rewritten];
     }
   } else {
     item.install = [command];
@@ -223,6 +290,15 @@ function mergeReadmeInstall(item, command, dir, readmeFile) {
     item.evidence = `${item.evidence} / ${readmeFile}`;
   }
   return item;
+}
+
+/** 判断该用哪个解释器创建 venv：MSYS2 的 python 会生成 bin/ 布局，优先用 Windows 的 py 启动器。 */
+async function pythonVenvCreator(exec) {
+  const result = await exec('python', ['-c', 'import sys; print(sys.executable)'], { timeoutMs: 5000 });
+  const executable = String(result.stdout || '').trim();
+  if (!/msys|mingw|cygwin/i.test(executable)) return 'python';
+  const launcher = await exec('py', ['-3', '--version'], { timeoutMs: 5000 });
+  return launcher.ok ? 'py -3' : 'python';
 }
 
 function missingPackages(python, required, exec) {
@@ -309,30 +385,42 @@ async function inspectNode(dir, { detection, probed }) {
 }
 
 async function inspectPython(dir, { detection, probed, exec }) {
-  const hasRequirements = exists(dir, 'requirements.txt');
+  const requirementsFile = findRequirementsFile(dir);
+  const hasRequirements = Boolean(requirementsFile);
   const hasPyproject = exists(dir, 'pyproject.toml');
   const hasPipfile = exists(dir, 'Pipfile');
   const hasManage = exists(dir, 'manage.py');
-  if (!hasRequirements && !hasPyproject && !hasPipfile && !hasManage) return null;
+  const hasSetupPy = exists(dir, 'setup.py');
+  if (!hasRequirements && !hasPyproject && !hasPipfile && !hasManage && !hasSetupPy) return null;
 
   const pyproject = readText(dir, 'pyproject.toml');
   const python = probed.get('python');
   const builder = pythonBuilder(dir, probed, pyproject);
   const venv = findVenv(dir);
+  const creator = await pythonVenvCreator(exec);
   const requiredVersion = parseRequiresPython(pyproject);
+  const advisoryVersion = parseVersionFile(dir);
 
   const toolsUsed = [python, ...builder.requires.map((name) => probed.get(name)).filter(Boolean)].filter(Boolean);
   const consent = [...consentFor(python, 'python'), ...builder.consent].filter(Boolean);
 
   const required = [
-    ...(hasRequirements ? parseRequirements(readText(dir, 'requirements.txt')) : []),
+    ...(hasRequirements ? parseRequirements(readText(dir, requirementsFile)) : []),
     ...(hasPyproject ? parsePyprojectDependencies(pyproject) : []),
     ...(hasPipfile ? parseRequirements(readText(dir, 'Pipfile')) : []),
   ];
 
   const install = builder.commands.length
     ? builder.commands
-    : [venvInstallCommand(dir, (venv && venv.name) || '.venv', hasRequirements, hasPyproject, Boolean(venv))];
+    : [
+        venvInstallCommand(dir, {
+          venv,
+          creator,
+          requirementsFile,
+          hasPyproject,
+          hasSetupPy,
+        }),
+      ];
 
   let status = 'ok';
   let detail = '';
@@ -369,15 +457,22 @@ async function inspectPython(dir, { detection, probed, exec }) {
     }
   }
 
+  const versionNote =
+    advisoryVersion && python && python.version && tools.compareVersions(python.version, advisoryVersion) < 0
+      ? `（项目声明 Python ${advisoryVersion}，本机 ${python.version}，按本机版本继续）`
+      : '';
+  if (versionNote && status !== 'error') detail = `${detail}${versionNote}`;
+
   return {
     id: 'python',
     label: 'Python 依赖',
     runtime: 'Python',
     status,
     detail,
-    evidence: hasRequirements ? 'requirements.txt' : hasPyproject ? 'pyproject.toml' : 'Pipfile',
+    evidence: hasRequirements ? requirementsFile : hasPyproject ? 'pyproject.toml' : hasPipfile ? 'Pipfile' : 'setup.py',
     install,
     consent,
+    venvCreator: creator,
     tools: toolsUsed.map((tool) => ({
       name: tool.name,
       label: tool.label,
@@ -421,6 +516,29 @@ async function inspectDocker(dir, { probed }) {
   };
 }
 
+const ENV_EXAMPLE_NAMES = ['.env.example', '.env.sample', '.env.template', 'env.example'];
+
+/** 只有示例环境变量、没有 .env 时，提示复制一份（启动失败最常见的原因之一）。 */
+function inspectEnvFile(dir) {
+  if (exists(dir, '.env')) return null;
+  const example = ENV_EXAMPLE_NAMES.map((name) => findCaseFile(dir, name)).find(Boolean);
+  if (!example) return null;
+
+  return {
+    id: 'envfile',
+    label: '.env 配置文件',
+    runtime: 'env',
+    status: 'missing',
+    detail: `没有 .env，可从 ${example} 复制一份再按需改值`,
+    evidence: example,
+    install: [],
+    actions: [{ kind: 'copy-env', from: example, to: '.env' }],
+    consent: [],
+    tools: [],
+    cwd: '.',
+  };
+}
+
 function databaseItem(database) {
   if (!database) return null;
   let status = 'ok';
@@ -451,19 +569,71 @@ function databaseItem(database) {
   };
 }
 
-function listEnvResidue(dir) {
+/**
+ * 递归扫描项目内的环境与残留（最多 5 层），命中目录后不再往里钻。
+ * 返回相对路径，便于工作区 / monorepo 里的子目录也能被清掉。
+ */
+function scanResidue(dir, { maxDepth = 5 } = {}) {
   const found = [];
-  for (const name of [...ENV_CANDIDATES, ...RESIDUE_CANDIDATES]) {
-    const target = path.join(dir, name);
-    if (!fs.existsSync(target)) continue;
-    found.push({
-      name,
-      path: target,
-      kind: ENV_CANDIDATES.includes(name) ? 'env' : 'residue',
-      directory: fs.statSync(target).isDirectory(),
-    });
-  }
-  return found;
+
+  const visit = (current, depth) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    // 从 .env.example 原样复制出来、且没被改过的 .env 也算 DevDock 留下的文件
+    const envFile = path.join(current, '.env');
+    if (fs.existsSync(envFile)) {
+      const example = ENV_EXAMPLE_NAMES.map((name) => findCaseFile(current, name)).find(Boolean);
+      if (example) {
+        try {
+          const same = fs.readFileSync(envFile, 'utf8') === fs.readFileSync(path.join(current, example), 'utf8');
+          if (same) {
+            found.push({ name: path.relative(dir, envFile) || '.env', path: envFile, kind: 'envfile', directory: false });
+          }
+        } catch {
+          /* 读不了就不删 */
+        }
+      }
+    }
+
+    for (const entry of entries) {
+      const name = entry.name;
+      if (name === '.git' || name === '.hg' || name === '.svn') continue;
+
+      const abs = path.join(current, name);
+      const relative = path.relative(dir, abs) || name;
+      const isDirectory = entry.isDirectory();
+      let kind = null;
+
+      if (isDirectory) {
+        if (ENV_DIR_NAMES.has(name)) kind = 'env';
+        else if (CACHE_DIR_NAMES.has(name)) kind = 'cache';
+        else if (BUILD_DIR_NAMES.has(name)) kind = 'build';
+        else if (RESIDUE_DIR_NAMES.has(name)) kind = 'residue';
+        else if (/\.egg-info$/i.test(name)) kind = 'cache';
+      } else if (RESIDUE_FILE_NAMES.has(name) || /^devdock\.cmd$/i.test(name)) {
+        kind = 'residue';
+      }
+
+      if (kind) {
+        found.push({ name: relative, path: abs, kind, directory: isDirectory });
+        continue;
+      }
+
+      if (isDirectory && depth < maxDepth) visit(abs, depth + 1);
+    }
+  };
+
+  visit(dir, 0);
+  return found.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function listEnvResidue(dir) {
+  return scanResidue(dir);
 }
 
 function assertInside(dir, target) {
@@ -475,10 +645,20 @@ function assertInside(dir, target) {
   return resolved;
 }
 
-/** 删除项目内的环境与 DevDock 残留，返回删掉的相对路径。 */
-function removeEnvs(dir) {
+/**
+ * 删除项目内的环境与 DevDock 残留，返回删掉的相对路径。
+ * includeBuild 为 true 时连缓存与构建产物（__pycache__ / dist / target …）一起删。
+ */
+function removeEnvs(dir, { includeBuild = true } = {}) {
+  const kinds = new Set(['env', 'residue', 'envfile']);
+  if (includeBuild) {
+    kinds.add('cache');
+    kinds.add('build');
+  }
+
   const removed = [];
-  for (const item of listEnvResidue(dir)) {
+  for (const item of scanResidue(dir)) {
+    if (!kinds.has(item.kind)) continue;
     const target = assertInside(dir, item.path);
     fs.rmSync(target, { recursive: true, force: true });
     removed.push(item.name);
@@ -506,14 +686,40 @@ async function inspectProject(dir, options = {}) {
     .map((name) => readText(dir, findCaseFile(dir, name) || name))
     .join('\n');
 
+  // 根目录没有清单时，按子项目（backend/ + web/）分别体检
+  const rootManifest =
+    ['package.json', 'requirements.txt', 'pyproject.toml', 'Pipfile', 'manage.py', 'setup.py'].some((name) =>
+      exists(dir, name),
+    ) || Boolean(findRequirementsFile(dir));
+
+  const contexts = [];
+  if (rootManifest) {
+    contexts.push({ cwd: '.', serviceId: null, prefix: '', label: '' });
+  } else {
+    for (const service of detection.services || []) {
+      if (!service.cwd || service.cwd === '.') continue;
+      if (contexts.some((ctx) => ctx.cwd === service.cwd)) continue;
+      contexts.push({ cwd: service.cwd, serviceId: service.id, prefix: `${service.id}:`, label: service.name });
+    }
+    if (contexts.length === 0) contexts.push({ cwd: '.', serviceId: null, prefix: '', label: '' });
+  }
+
+  const contextDir = (ctx) => (ctx.cwd === '.' ? dir : path.join(dir, ctx.cwd));
+
   const toolNames = [];
-  const pkg = exists(dir, 'package.json') ? readJson(dir, 'package.json') : null;
-  if (pkg) toolNames.push('node', nodePackageManager(dir, pkg));
-  if (exists(dir, 'requirements.txt') || exists(dir, 'pyproject.toml') || exists(dir, 'Pipfile') || exists(dir, 'manage.py')) {
-    toolNames.push('python');
-    if (exists(dir, 'uv.lock')) toolNames.push('uv');
-    if (/\[tool\.poetry\]/.test(readText(dir, 'pyproject.toml'))) toolNames.push('poetry');
-    if (exists(dir, 'Pipfile')) toolNames.push('pipenv');
+  for (const ctx of contexts) {
+    const ctxDir = contextDir(ctx);
+    const pkg = exists(ctxDir, 'package.json') ? readJson(ctxDir, 'package.json') : null;
+    if (pkg) toolNames.push('node', nodePackageManager(ctxDir, pkg));
+    if (
+      findRequirementsFile(ctxDir) ||
+      ['pyproject.toml', 'Pipfile', 'manage.py', 'setup.py'].some((name) => exists(ctxDir, name))
+    ) {
+      toolNames.push('python');
+      if (exists(ctxDir, 'uv.lock')) toolNames.push('uv');
+      if (/\[tool\.poetry\]/.test(readText(ctxDir, 'pyproject.toml'))) toolNames.push('poetry');
+      if (exists(ctxDir, 'Pipfile')) toolNames.push('pipenv');
+    }
   }
   if (composeFile) toolNames.push('docker');
 
@@ -522,14 +728,34 @@ async function inspectProject(dir, options = {}) {
   const database = await dbstart.detectDatabase({ composeText, readmeText, envText, services: detection.services, exec, platform });
 
   const items = [];
-  const nodeItem = await inspectNode(dir, { detection, probed });
-  if (nodeItem) items.push(nodeItem);
-  const pythonItem = await inspectPython(dir, { detection, probed, exec });
-  if (pythonItem) items.push(pythonItem);
+  for (const ctx of contexts) {
+    const ctxDir = contextDir(ctx);
+    const decorate = (item) => {
+      if (!item) return null;
+      return {
+        ...item,
+        id: `${ctx.prefix}${item.id}`,
+        label: ctx.label ? `${ctx.label} · ${item.label}` : item.label,
+        cwd: ctx.cwd,
+        serviceId: ctx.serviceId,
+      };
+    };
+
+    const nodeItem = decorate(
+      await inspectNode(ctxDir, { detection: ctx.cwd === '.' ? detection : { setupCommand: '' }, probed }),
+    );
+    if (nodeItem) items.push(nodeItem);
+    const pythonItem = decorate(await inspectPython(ctxDir, { detection, probed, exec }));
+    if (pythonItem) items.push(pythonItem);
+  }
+
   const dockerItem = await inspectDocker(dir, { probed });
   if (dockerItem) items.push(dockerItem);
   const dbItem = databaseItem(database);
   if (dbItem) items.push(dbItem);
+
+  const envFileItem = inspectEnvFile(dir);
+  if (envFileItem) items.push(envFileItem);
 
   // README 里写了安装步骤：能对上语言的并回对应体检项（README 优先），
   // 完全对不上的才单独列一条，避免同一件事出现两遍。
@@ -538,7 +764,14 @@ async function inspectProject(dir, options = {}) {
     const ecosystem = setupEcosystem(readmeSetup);
     const target = ecosystem ? items.find((item) => item.id === ecosystem) : null;
     if (target) {
-      mergeReadmeInstall(target, readmeSetup, dir, readmeName);
+      mergeReadmeInstall(
+        target,
+        readmeSetup,
+        dir,
+        readmeName,
+        target.venvCreator || 'python',
+        findRequirementsFile(dir),
+      );
     } else if (!items.some((item) => item.install.includes(readmeSetup))) {
       items.push({
         id: 'readme',
@@ -597,9 +830,9 @@ function buildPlan(inspection, { allowToolDownload = false, itemIds = null } = {
   const consent = [];
   const seen = new Set();
 
-  const push = (list, step) => {
-    if (seen.has(step.command)) return;
-    seen.add(step.command);
+  const push = (list, key, step) => {
+    if (seen.has(key)) return;
+    seen.add(key);
     list.push(step);
   };
 
@@ -607,9 +840,22 @@ function buildPlan(inspection, { allowToolDownload = false, itemIds = null } = {
     if (wanted && !wanted.has(item.id)) continue;
     if (item.status === 'ok') continue;
 
+    const cwd = item.cwd || '.';
+
+    for (const action of item.actions || []) {
+      push(steps, `action:${action.kind}:${cwd}:${action.from}:${action.to}`, {
+        id: `action:${item.id}`,
+        itemId: item.id,
+        title: `准备 ${action.to}`,
+        action,
+        cwd,
+        needsConsent: false,
+      });
+    }
+
     const toolPlans = item.consent || [];
     for (const plan of toolPlans) {
-      push(consent, {
+      push(consent, `tool:${plan.tool}`, {
         id: `tool:${plan.tool}`,
         itemId: item.id,
         title: plan.title,
@@ -623,11 +869,12 @@ function buildPlan(inspection, { allowToolDownload = false, itemIds = null } = {
     if (toolPlans.length > 0) continue;
 
     for (const command of item.install || []) {
-      push(steps, {
+      push(steps, `install:${item.id}:${cwd}:${command}`, {
         id: `install:${item.id}`,
         itemId: item.id,
         title: `安装 ${item.label}`,
         command,
+        cwd,
         needsConsent: false,
       });
     }

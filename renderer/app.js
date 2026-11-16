@@ -197,8 +197,8 @@ function renderDetail() {
 
   $('btn-activate').hidden = active;
   $('btn-stop').hidden = !running && !state.busy[profile.id];
-  $('btn-start').disabled = running || Boolean(state.busy[profile.id]);
-  $('btn-setup').disabled = Boolean(state.busy[profile.id]);
+  $('btn-start').disabled = running || Boolean(state.busy[profile.id]) || Boolean(state.envBusy[profile.id]);
+  $('btn-setup').disabled = Boolean(state.busy[profile.id]) || Boolean(state.envBusy[profile.id]);
 
   renderConfig(profile);
   renderLogServiceFilter(profile);
@@ -433,6 +433,7 @@ function renderEnvPanel(profile) {
               <span class="env-item-name">${escapeHtml(item.label)}</span>
               <span class="${detailClass}">${ENV_STATUS_TEXT[item.status] || item.status}</span>
               ${item.evidence ? `<span class="mini-tag">${escapeHtml(item.evidence)}</span>` : ''}
+              ${item.cwd && item.cwd !== '.' ? `<span class="mini-tag">${escapeHtml(item.cwd)}</span>` : ''}
               <div class="spacer" style="flex:1"></div>
               ${
                 item.status !== 'ok' && item.install && item.install.length
@@ -534,13 +535,18 @@ function openPlanDialog(profile, itemIds) {
     ? '带「需下载」的步骤会联网并修改本机工具，只有点确认后才会执行。'
     : '下面这些命令会在项目目录里执行，输出会出现在运行日志里。';
   $('env-plan-list').innerHTML = all
-    .map(
-      (step) => `
+    .map((step) => {
+      const body = step.command
+        ? `<code>${escapeHtml(step.command)}</code>`
+        : step.action && step.action.kind === 'copy-env'
+          ? `<div class="hint">${escapeHtml(step.action.from)} → ${escapeHtml(step.action.to)}</div>`
+          : '';
+      return `
       <li>
         <div>${escapeHtml(step.title)}${step.needsConsent ? '<span class="mini-tag warn">需下载</span>' : ''}</div>
-        <code>${escapeHtml(step.command)}</code>
-      </li>`,
-    )
+        ${body}
+      </li>`;
+    })
     .join('');
   $('btn-plan-confirm').textContent = consents.length ? '同意并安装' : '开始安装';
   $('env-plan-dialog').showModal();
@@ -619,21 +625,42 @@ async function submitDbDialog(event) {
 }
 
 async function openDeleteDialog(profile) {
-  const residues = await api.envResidue(profile.dir).catch(() => []);
+  const payload = await api.envResidue(profile.dir).catch(() => ({ items: [], compose: null }));
+  const residues = Array.isArray(payload) ? payload : payload.items || [];
+  const compose = Array.isArray(payload) ? null : payload.compose;
   state.pendingDelete = profile;
-  const has = residues.length > 0;
+
+  const hasEnv = residues.some((item) => ['env', 'residue', 'envfile'].includes(item.kind));
+  const hasBuild = residues.some((item) => item.kind === 'cache' || item.kind === 'build');
+
   $('delete-hint').textContent = `将从 DevDock 删除「${profile.name}」的档案，项目源码不会被删除。`;
-  $('delete-env').checked = has;
-  $('delete-env').disabled = !has;
-  $('delete-env-label').textContent = has
-    ? '同时删除项目内的环境与残留（不可恢复）'
+  $('delete-env').checked = hasEnv;
+  $('delete-env').disabled = !hasEnv;
+  $('delete-env-label').textContent = hasEnv
+    ? `同时删除项目内的环境与残留（${residues.filter((item) => ['env', 'residue', 'envfile'].includes(item.kind)).length} 项）`
     : '项目里没有发现环境残留';
-  $('residue-list').hidden = !has;
+
+  $('delete-build').checked = hasBuild;
+  $('delete-build').disabled = !hasBuild;
+
+  $('delete-compose-hint').hidden = !compose;
+  $('delete-compose-hint').textContent = compose ? `检测到 ${compose}：删除时会先停止该项目的容器（保留数据卷）。` : '';
+
+  $('residue-list').hidden = residues.length === 0;
   $('residue-list').innerHTML = residues
-    .map(
-      (item) =>
-        `<li><span>${escapeHtml(item.name)}</span><span class="mini-tag">${item.kind === 'env' ? '环境' : '残留'}</span></li>`,
-    )
+    .map((item) => {
+      const kindLabel =
+        item.kind === 'env'
+          ? '环境'
+          : item.kind === 'cache'
+            ? '缓存'
+            : item.kind === 'build'
+              ? '构建'
+              : item.kind === 'envfile'
+                ? '配置'
+                : '残留';
+      return `<li><span title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><span class="mini-tag">${kindLabel}</span></li>`;
+    })
     .join('');
   $('delete-dialog').showModal();
 }
@@ -642,11 +669,12 @@ async function confirmDelete() {
   const profile = state.pendingDelete;
   if (!profile) return;
   const removeEnv = $('delete-env').checked;
+  const includeBuild = $('delete-build').checked;
   state.pendingDelete = null;
   $('delete-dialog').close();
 
   try {
-    const result = await api.remove(profile.id, { removeEnv });
+    const result = await api.remove(profile.id, { removeEnv, includeBuild });
     state.logs.delete(profile.id);
     state.logClassifiers.delete(profile.id);
     delete state.envcheck[profile.id];
@@ -655,7 +683,9 @@ async function confirmDelete() {
     if (state.selectedId === profile.id) state.selectedId = null;
     await refresh();
     const count = result && Array.isArray(result.removedEnvs) ? result.removedEnvs.length : 0;
-    toast(removeEnv ? `档案已删除，清理了 ${count} 项环境残留` : '档案已删除', 'success');
+    const suffix = removeEnv ? `，清理了 ${count} 项环境残留` : '';
+    const dockerNote = result && result.docker && result.docker.ok === false ? '；Docker 容器停止失败' : '';
+    toast(`档案已删除${suffix}${dockerNote}`, 'success');
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -846,6 +876,10 @@ async function activate(profile) {
 }
 
 async function start(profile) {
+  if (state.envBusy[profile.id]) {
+    toast('环境还在安装中，请等安装完成再启动', 'error');
+    return;
+  }
   const inspection = state.envcheck[profile.id] || (await ensureEnvcheck(profile.id));
   if (inspection && inspection.database && !inspection.database.container && !state.dbReady.has(profile.id)) {
     state.pendingStart = profile.id;
@@ -1398,6 +1432,15 @@ function bindEvents() {
       state.setupAt[payload.projectId] = Date.now();
       renderAll();
       toast('环境搭建完成', 'success');
+      ensureEnvcheck(payload.projectId, { force: true });
+      return;
+    }
+    if (payload.type === 'setup-incomplete') {
+      delete state.busy[payload.projectId];
+      delete state.envBusy[payload.projectId];
+      toast(payload.message, 'error');
+      state.tab = 'env';
+      syncTabs();
       ensureEnvcheck(payload.projectId, { force: true });
       return;
     }

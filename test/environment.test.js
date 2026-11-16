@@ -212,12 +212,17 @@ test('删除项目时可一并清理项目内的环境残留', async () => {
 });
 
 test('安装计划按体检结果执行对应命令', async () => {
-  const inspection = {
-    items: [{ id: 'node', label: 'Node.js 依赖', status: 'missing', install: ['npm install'], consent: [] }],
+  let calls = 0;
+  const inspectEnv = async () => {
+    calls += 1;
+    return {
+      items:
+        calls === 1
+          ? [{ id: 'node', label: 'Node.js 依赖', status: 'missing', install: ['npm install'], consent: [] }]
+          : [{ id: 'node', label: 'Node.js 依赖', status: 'ok', install: ['npm install'], consent: [] }],
+    };
   };
-  const { env, store, runner, events } = setup([makeProfile({ id: 'a' })], {}, {
-    inspectEnv: async () => inspection,
-  });
+  const { env, store, runner, events } = setup([makeProfile({ id: 'a' })], {}, { inspectEnv });
 
   await env.installPlan('a');
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -228,6 +233,50 @@ test('安装计划按体检结果执行对应命令', async () => {
   );
   assert.equal(store.isSetup('a'), true);
   assert.ok(events.some((event) => event.type === 'setup-done'));
+});
+
+test('安装后仍有缺失项时广播 setup-incomplete 且不标记完成', async () => {
+  const inspection = {
+    items: [{ id: 'node', label: 'Node.js 依赖', status: 'missing', install: ['npm install'], consent: [] }],
+  };
+  const { env, store, events } = setup([makeProfile({ id: 'a' })], {}, { inspectEnv: async () => inspection });
+
+  await env.installPlan('a');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(store.isSetup('a'), false);
+  const event = events.find((item) => item.type === 'setup-incomplete');
+  assert.ok(event);
+  assert.match(event.message, /未就绪/);
+});
+
+test('安装计划会执行 .env 复制动作', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devdock-envcopy-'));
+  fs.writeFileSync(path.join(dir, '.env.example'), 'KEY=value\n');
+  const copyInspection = {
+    items: [
+      {
+        id: 'envfile',
+        label: '.env 配置文件',
+        status: 'missing',
+        install: [],
+        actions: [{ kind: 'copy-env', from: '.env.example', to: '.env' }],
+        consent: [],
+      },
+    ],
+  };
+  const okInspection = { items: [] };
+  let calls = 0;
+  const { env } = setup([makeProfile({ id: 'a', dir })], {}, {
+    inspectEnv: async () => {
+      calls += 1;
+      return calls === 1 ? copyInspection : okInspection;
+    },
+  });
+
+  await env.installPlan('a');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(fs.readFileSync(path.join(dir, '.env'), 'utf8'), 'KEY=value\n');
 });
 
 test('体检通过时 installPlan 拒绝空计划', async () => {
@@ -258,6 +307,31 @@ test('数据库密钥通过 secretVars 注入执行环境', () => {
   });
   const context = env.derive(profile, { id: 'api', cwd: '.', setupCommand: '', startCommand: '', envVars: [] });
   assert.equal(context.envVars.some((item) => item.key === 'DATABASE_URL'), true);
+});
+
+test('venv 存在时把 python / pip / uvicorn 命令切到 venv 解释器', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devdock-venvcmd-'));
+  fs.mkdirSync(path.join(dir, '.venv', 'Scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.venv', 'Scripts', 'python.exe'), '');
+
+  const profile = makeProfile({ id: 'a', dir });
+  const { env } = setup([profile]);
+  const service = { id: 'main', cwd: '.', startCommand: 'python app.py', setupCommand: '', envVars: [] };
+  const python = `"${path.join(dir, '.venv', 'Scripts', 'python.exe')}"`;
+
+  assert.equal(env.commandFor(profile, service, 'python app.py'), `${python} app.py`);
+  assert.equal(
+    env.commandFor(profile, service, 'pip install -r requirements.txt'),
+    `${python} -m pip install -r requirements.txt`,
+  );
+  assert.equal(env.commandFor(profile, service, 'uvicorn app:app --port 8000'), `${python} -m uvicorn app:app --port 8000`);
+  assert.equal(env.commandFor(profile, service, 'node server.js'), 'node server.js');
+});
+
+test('没有 venv 时不改写命令', () => {
+  const profile = makeProfile({ id: 'a', dir: fs.mkdtempSync(path.join(os.tmpdir(), 'devdock-novenv-')) });
+  const { env } = setup([profile]);
+  assert.equal(env.commandFor(profile, { cwd: '.' }, 'python app.py'), 'python app.py');
 });
 
 test('shutdown 同步清理全部进程', () => {

@@ -340,6 +340,11 @@
             <input type="checkbox" id="delete-env" checked />
             <span id="delete-env-label">同时删除项目内的环境与残留（不可恢复）</span>
           </label>
+          <label class="check">
+            <input type="checkbox" id="delete-build" checked />
+            <span>同时删除缓存与构建产物（__pycache__ / dist / target 等）</span>
+          </label>
+          <p class="hint" id="delete-compose-hint" hidden>检测到 docker compose：会先停止该项目的容器（保留数据卷）。</p>
           <p class="hint">项目源码不会被删除。</p>
         </div>
         <footer class="editor-foot">

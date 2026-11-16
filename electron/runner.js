@@ -41,6 +41,7 @@ class Runner {
     this.onLog = onLog || (() => {});
     this.onState = onState || (() => {});
     this.running = new Map(); // projectId -> Set<entry>
+    this.lastOutput = new Map(); // `${projectId}:${serviceId}` -> 最近输出
     fs.mkdirSync(logRoot, { recursive: true });
   }
 
@@ -55,6 +56,11 @@ class Runner {
 
   isRunning(projectId) {
     return this.#entries(projectId).size > 0;
+  }
+
+  /** 最近一次执行留下的输出（进程退出后仍然可取），用于失败诊断。 */
+  tail(projectId, serviceId = 'main') {
+    return this.lastOutput.get(`${projectId}:${serviceId}`) || '';
   }
 
   status(projectId) {
@@ -119,6 +125,7 @@ class Runner {
         cwd: profile.dir,
         env,
         windowsHide: true,
+        windowsVerbatimArguments: process.platform === 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -162,6 +169,7 @@ class Runner {
       const set = this.#entries(profile.id);
       set.delete(entry);
       if (set.size === 0) this.running.delete(profile.id);
+      this.lastOutput.set(`${profile.id}:${serviceId}`, entry.tail);
 
       const prefix = entry.stopping ? '[DevDock] 已停止' : `[DevDock] 进程退出`;
       const detail = signal ? `signal=${signal}` : `code=${code}`;
