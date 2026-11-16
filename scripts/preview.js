@@ -152,7 +152,7 @@ window.devdock = {
     const key = Object.keys(runtime).find((id) => profiles.find((p) => p.id === id && p.dir === dir));
     return key ? runtime[key] : { runtime: null, setupCommand: '', startCommand: '', notes: ['未识别项目类型，请手动填写安装与启动命令'] };
   },
-  save: async (profile) => ({ ...profile, id: profile.id || 'p-new' }),
+  save: async (profile) => ({ ...profile, id: profile.id || 'p-new', launcher: null }),
   remove: async (id) => ({ id }),
   pickDir: async () => null,
   activate: async (id) => ({ activeId: id }),
@@ -163,6 +163,7 @@ window.devdock = {
   openDir: async () => ({ opened: true }),
   openLogs: async () => ({ opened: true }),
   revealLog: async () => ({ revealed: true }),
+  link: async () => ({ launcherPath: 'devdock.cmd' }),
   onLog: (callback) => {
     logCallback = callback;
     return () => {};

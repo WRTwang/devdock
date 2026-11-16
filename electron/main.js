@@ -7,6 +7,7 @@ const { Store } = require('./store');
 const { detectProject } = require('./detector');
 const { Runner } = require('./runner');
 const { Environment } = require('./environment');
+const linker = require('./linker');
 
 const isDev = !app.isPackaged;
 
@@ -58,7 +59,31 @@ function registerIpc() {
     if (!dir) throw new Error('请填写项目路径');
     if (!fs.existsSync(dir)) throw new Error(`目录不存在: ${dir}`);
     if (!fs.statSync(dir).isDirectory()) throw new Error(`不是目录: ${dir}`);
-    return store.saveProfile({ ...input, dir: path.resolve(dir) });
+
+    const saved = store.saveProfile({ ...input, dir: path.resolve(dir) });
+    if (!saved.linkLauncher) return saved;
+
+    try {
+      const launcher = linker.writeLauncher(saved.dir, saved, {
+        exePath: process.execPath,
+        appPath: app.getAppPath(),
+        packaged: app.isPackaged,
+      });
+      return { ...saved, launcher };
+    } catch (error) {
+      return { ...saved, launcherError: error.message };
+    }
+  });
+
+  handle('project:link', (id) => {
+    const profile = store.find(id);
+    if (!profile) throw new Error('项目不存在');
+    if (!profile.linkLauncher) throw new Error('该项目已关闭启动器生成');
+    return linker.writeLauncher(profile.dir, profile, {
+      exePath: process.execPath,
+      appPath: app.getAppPath(),
+      packaged: app.isPackaged,
+    });
   });
 
   handle('profiles:delete', (id) => environment.remove(id));

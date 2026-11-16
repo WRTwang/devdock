@@ -213,6 +213,7 @@ function renderConfig(profile) {
     ? `已就绪 · ${timeAgo(state.setupAt[profile.id])}`
     : '未搭建';
   $('cfg-last-used').textContent = fmtDateTime(profile.lastUsedAt);
+  $('cfg-launcher').textContent = profile.linkLauncher ? 'devdock.cmd' : '未生成';
 
   renderServiceCard(profile);
 
@@ -498,6 +499,7 @@ function openEditor(profile) {
   $('f-shell').value = profile ? profile.shell : 'cmd';
   $('f-auto-setup').checked = profile ? profile.autoSetup : true;
   $('f-sync-env').checked = profile ? profile.syncDotEnv : false;
+  $('f-link-launcher').checked = profile ? profile.linkLauncher !== false : true;
   $('service-error').hidden = true;
 
   const rows = profile ? ServiceForm.buildRows(profile) : [];
@@ -755,6 +757,7 @@ async function saveEditor(event) {
     services,
     autoSetup: $('f-auto-setup').checked,
     syncDotEnv: $('f-sync-env').checked,
+    linkLauncher: $('f-link-launcher').checked,
   };
 
   try {
@@ -768,9 +771,11 @@ async function saveEditor(event) {
       await api.activate(saved.id);
       state.activeId = saved.id;
       renderAll();
-      toast(`已创建并切换到 ${saved.name} 的环境`, 'success');
+      const suffix = saved.launcher ? '，已生成 devdock.cmd 启动器' : '';
+      toast(`已创建并切换到 ${saved.name} 的环境${suffix}`, 'success');
     } else {
-      toast('配置已保存', 'success');
+      const suffix = saved.launcher ? '，已更新 devdock.cmd' : '';
+      toast(`配置已保存${suffix}`, 'success');
     }
   } catch (error) {
     $('dir-error').textContent = error.message;

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('devdock', {
   openDir: (dir) => invoke('shell:openDir', dir),
   openLogs: () => invoke('log:openDir'),
   revealLog: (file) => invoke('log:reveal', file),
+  link: (id) => invoke('project:link', id),
   onLog: (callback) => subscribe('log:event', callback),
   onState: (callback) => subscribe('state:event', callback),
 });

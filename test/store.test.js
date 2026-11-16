@@ -88,3 +88,13 @@ test('markSetup 记录环境搭建时间', () => {
   store.markSetup(profile.id);
   assert.equal(store.isSetup(profile.id), true);
 });
+
+test('linkLauncher 默认开启，显式关闭后保持关闭', () => {
+  const store = new Store(tmpDir());
+  const enabled = store.saveProfile({ dir: 'D:\\a' });
+  assert.equal(enabled.linkLauncher, true);
+
+  const disabled = store.saveProfile({ id: enabled.id, dir: 'D:\\a', linkLauncher: false });
+  assert.equal(disabled.linkLauncher, false);
+  assert.equal(new Store(store.dataDir).find(enabled.id).linkLauncher, false);
+});

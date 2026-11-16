@@ -130,6 +130,7 @@
                   <div><dt>类型</dt><dd id="cfg-runtime">—</dd></div>
                   <div><dt>Shell</dt><dd id="cfg-shell">—</dd></div>
                   <div><dt>环境状态</dt><dd id="cfg-setup">—</dd></div>
+                  <div><dt>项目启动器</dt><dd id="cfg-launcher">—</dd></div>
                   <div><dt>上次使用</dt><dd id="cfg-last-used">—</dd></div>
                 </dl>
               </article>
@@ -220,6 +221,10 @@
             <label class="check">
               <input type="checkbox" id="f-sync-env" />
               <span>把环境变量同步写入项目 <code>.env</code>（停止时自动还原）</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="f-link-launcher" checked />
+              <span>在项目目录生成 <code>devdock.cmd</code> 启动器（双击即启动全部服务）</span>
             </label>
           </div>
         </div>

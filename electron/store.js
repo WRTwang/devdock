@@ -41,6 +41,7 @@ function normalizeProfile(raw) {
     envVars: normalizeEnvVars(raw.envVars),
     syncDotEnv: raw.syncDotEnv === true,
     autoSetup: raw.autoSetup !== false,
+    linkLauncher: raw.linkLauncher !== false,
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     lastUsedAt: Number.isFinite(raw.lastUsedAt) ? raw.lastUsedAt : null,
   };
