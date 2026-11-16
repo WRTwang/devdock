@@ -1,17 +1,21 @@
 'use strict';
 
+const path = require('node:path');
 const dotenv = require('./dotenv');
+const { resolveServices, sortServices } = require('./services');
+const probe = require('./probe');
 
 /**
  * 环境编排：保证同一时间只有一个活跃项目。
  * 依赖注入 store / runner，便于单元测试。
  */
 class Environment {
-  constructor({ store, runner, onEvent = () => {}, onLog = () => {} }) {
+  constructor({ store, runner, onEvent = () => {}, onLog = () => {}, waitForPort = probe.waitForPort }) {
     this.store = store;
     this.runner = runner;
     this.onEvent = onEvent;
     this.onLog = onLog;
+    this.waitForPort = waitForPort;
   }
 
   get activeId() {
@@ -80,38 +84,96 @@ class Environment {
     });
   }
 
+  /** 解析并按依赖顺序返回服务；旧档案自动迁移成单服务。 */
+  servicesOf(profile) {
+    const list =
+      Array.isArray(profile.services) && profile.services.length > 0 ? profile.services : resolveServices(profile);
+    const { order, cycle } = sortServices(list);
+    if (cycle) throw new Error(`服务依赖存在环：${cycle.join(' → ')}`);
+    return order;
+  }
+
+  /** 把服务配置展开成 runner 认识的执行上下文。 */
+  derive(profile, service) {
+    const cwd = service.cwd && service.cwd !== '.' ? path.resolve(profile.dir, service.cwd) : profile.dir;
+    return {
+      ...profile,
+      dir: cwd,
+      setupCommand: service.setupCommand || '',
+      startCommand: service.startCommand || '',
+      envVars: [...(profile.envVars || []), ...(service.envVars || [])],
+      syncDotEnv: Boolean(profile.syncDotEnv) && cwd === profile.dir,
+    };
+  }
+
+  async #setupServices(profile, services) {
+    for (const service of services) {
+      if (!service.setupCommand || !service.setupCommand.trim()) continue;
+      this.#emit('phase', { projectId: profile.id, phase: 'setup', message: `正在安装 ${service.name} 依赖…` });
+      const code = await this.execAndWait(this.derive(profile, service), service.setupCommand, 'setup');
+      if (code !== 0) {
+        throw new Error(`环境搭建失败：${service.name} 依赖安装失败（退出码 ${code}）`);
+      }
+    }
+  }
+
+  async #waitReady(profile, service) {
+    if (!service.port) return;
+    const timeoutMs = service.readyTimeoutMs || 60000;
+    const result = await this.waitForPort(service.port, { timeoutMs });
+    if (!result.ready) {
+      const seconds = Math.max(1, Math.round(result.elapsedMs / 1000));
+      throw new Error(`${service.name} 未就绪（端口 ${service.port} 在 ${seconds}s 内没有响应）`);
+    }
+    this.#emit('service-ready', { projectId: profile.id, serviceId: service.id, port: service.port });
+  }
+
   async start(projectId) {
     const profile = this.require(projectId);
-    if (!profile.startCommand.trim()) throw new Error('还没有配置启动命令');
+    const services = this.servicesOf(profile);
+
+    if (services.length === 0) throw new Error('还没有配置启动命令');
+    if (!services.some((service) => service.startCommand && service.startCommand.trim())) {
+      throw new Error('还没有配置启动命令');
+    }
 
     await this.activate(projectId, { reason: 'start' });
 
-    if (profile.autoSetup && profile.setupCommand.trim() && !this.store.isSetup(projectId)) {
+    if (profile.autoSetup && !this.store.isSetup(projectId)) {
       this.#emit('phase', { projectId, phase: 'setup', message: '首次启动，先搭建环境…' });
-      const code = await this.execAndWait(profile, profile.setupCommand, 'setup');
-      if (code !== 0) throw new Error('环境搭建失败，请查看日志后重试');
+      await this.#setupServices(profile, services);
       this.store.markSetup(projectId);
       this.#emit('setup-done', { projectId });
     }
 
-    this.runner.exec(profile, { command: profile.startCommand, kind: 'start' });
+    for (const service of services) {
+      if (!service.startCommand || !service.startCommand.trim()) {
+        await this.#waitReady(profile, service);
+        continue;
+      }
+
+      this.runner.exec(this.derive(profile, service), { command: service.startCommand, kind: 'start' });
+
+      if (service.role === 'database') {
+        await this.#waitReady(profile, service);
+      }
+    }
+
     return { starting: true };
   }
 
   async setup(projectId) {
     const profile = this.require(projectId);
-    if (!profile.setupCommand.trim()) throw new Error('还没有配置安装命令');
+    const services = this.servicesOf(profile);
+    const targets = services.filter((service) => service.setupCommand && service.setupCommand.trim());
+    if (targets.length === 0) throw new Error('还没有配置安装命令');
 
     await this.activate(projectId, { reason: 'setup' });
 
-    this.execAndWait(profile, profile.setupCommand, 'setup')
-      .then((code) => {
-        if (code === 0) {
-          this.store.markSetup(projectId);
-          this.#emit('setup-done', { projectId });
-        } else {
-          this.#emit('error', { projectId, message: `搭建环境失败（退出码 ${code}）` });
-        }
+    this.#setupServices(profile, targets)
+      .then(() => {
+        this.store.markSetup(projectId);
+        this.#emit('setup-done', { projectId });
       })
       .catch((error) => {
         this.#emit('error', { projectId, message: error.message });
