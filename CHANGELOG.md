@@ -2,6 +2,21 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-16
+
+### 新增
+
+- **环境体检**：同时读 README 与 `package.json` / `requirements.txt` / `pyproject.toml` / `Pipfile`，逐项判断已就绪（绿）、缺失（黄）、异常（红）
+- **按需安装**：每条缺失项可单独安装，也可一次装完；需要下载或升级工具时先弹确认框，同意后才执行
+- **工具版本协商**：探测 Node / npm / pnpm / yarn / bun / Python / uv / Poetry / pipenv / Docker 等版本，优先复用已达标工具
+- **数据库口令与自启**：识别 PostgreSQL / MySQL / Redis / MongoDB，弹窗输入口令后启动本机 Windows 服务，连接串只在内存与 `.env` 中流转
+- **删除即清理**：删除档案时列出 `.venv` / `node_modules` / `.devdock` / `devdock.cmd` 等残留，确认后一并删除
+
+### 说明
+
+- 数据库口令不写入 `profiles.json`；重启应用后首次启动项目会再次询问
+- 需要管理员权限的 `net start` 失败时会给出可手动执行的提示
+
 ## [0.3.0] - 2026-11-16
 
 ### 新增
