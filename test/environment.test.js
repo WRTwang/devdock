@@ -72,7 +72,7 @@ function createRunner(exitCodes = {}) {
   };
 }
 
-function setup(profiles, exitCodes) {
+function setup(profiles, exitCodes, extra = {}) {
   const store = createStore(profiles);
   const runner = createRunner(exitCodes);
   const events = [];
@@ -82,6 +82,7 @@ function setup(profiles, exitCodes) {
     runner,
     onEvent: (payload) => events.push(payload),
     onLog: (payload) => logs.push(payload),
+    ...extra,
   });
   return { env, store, runner, events, logs };
 }
@@ -191,6 +192,72 @@ test('删除项目会先停进程再移除档案', async () => {
   assert.deepEqual(runner.stopped, ['a']);
   assert.equal(store.getState().activeId, null);
   assert.equal(store.list().length, 0);
+});
+
+test('删除项目时可一并清理项目内的环境残留', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devdock-envremove-'));
+  fs.mkdirSync(path.join(dir, '.venv', 'Scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.venv', 'Scripts', 'python.exe'), '');
+  fs.mkdirSync(path.join(dir, '.devdock'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.devdock', 'project.json'), '{}');
+  fs.writeFileSync(path.join(dir, 'index.js'), 'console.log(1)\n');
+
+  const { env } = setup([makeProfile({ id: 'a', dir })]);
+  const result = await env.remove('a', { removeEnv: true });
+
+  assert.equal(result.removedEnvs.includes('.venv'), true);
+  assert.equal(result.removedEnvs.includes('.devdock'), true);
+  assert.equal(fs.existsSync(path.join(dir, '.venv')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'index.js')), true);
+});
+
+test('安装计划按体检结果执行对应命令', async () => {
+  const inspection = {
+    items: [{ id: 'node', label: 'Node.js 依赖', status: 'missing', install: ['npm install'], consent: [] }],
+  };
+  const { env, store, runner, events } = setup([makeProfile({ id: 'a' })], {}, {
+    inspectEnv: async () => inspection,
+  });
+
+  await env.installPlan('a');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.deepEqual(
+    runner.calls.filter((call) => call[0] === 'exec'),
+    [['exec', 'setup', 'npm install']],
+  );
+  assert.equal(store.isSetup('a'), true);
+  assert.ok(events.some((event) => event.type === 'setup-done'));
+});
+
+test('体检通过时 installPlan 拒绝空计划', async () => {
+  const { env } = setup([makeProfile({ id: 'a' })], {}, { inspectEnv: async () => ({ items: [] }) });
+  await assert.rejects(() => env.installPlan('a'), /没有需要安装/);
+});
+
+test('需要下载工具但未同意时拒绝执行', async () => {
+  const inspection = {
+    items: [
+      {
+        id: 'node',
+        label: 'Node.js',
+        status: 'missing',
+        install: [],
+        consent: [{ tool: 'node', title: '安装 Node.js', command: 'winget install OpenJS.NodeJS.LTS', download: true }],
+      },
+    ],
+  };
+  const { env } = setup([makeProfile({ id: 'a' })], {}, { inspectEnv: async () => inspection });
+  await assert.rejects(() => env.installPlan('a'), /同意/);
+});
+
+test('数据库密钥通过 secretVars 注入执行环境', () => {
+  const profile = makeProfile({ id: 'a' });
+  const { env } = setup([profile], {}, {
+    secretVars: () => [{ key: 'DATABASE_URL', value: 'postgresql://u:p@127.0.0.1:5432/db' }],
+  });
+  const context = env.derive(profile, { id: 'api', cwd: '.', setupCommand: '', startCommand: '', envVars: [] });
+  assert.equal(context.envVars.some((item) => item.key === 'DATABASE_URL'), true);
 });
 
 test('shutdown 同步清理全部进程', () => {

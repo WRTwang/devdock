@@ -580,4 +580,4 @@ function detectProject(dir) {
   return result;
 }
 
-module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage, findReadme };
+module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage, findReadme, findComposeFile };

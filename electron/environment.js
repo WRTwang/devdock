@@ -4,18 +4,31 @@ const path = require('node:path');
 const dotenv = require('./dotenv');
 const { resolveServices, sortServices } = require('./services');
 const probe = require('./probe');
+const envcheck = require('./envcheck');
 
 /**
  * 环境编排：保证同一时间只有一个活跃项目。
  * 依赖注入 store / runner，便于单元测试。
  */
 class Environment {
-  constructor({ store, runner, onEvent = () => {}, onLog = () => {}, waitForPort = probe.waitForPort }) {
+  constructor({
+    store,
+    runner,
+    onEvent = () => {},
+    onLog = () => {},
+    waitForPort = probe.waitForPort,
+    secretVars = () => [],
+    ensureDatabase = async () => null,
+    inspectEnv = envcheck.inspectProject,
+  }) {
     this.store = store;
     this.runner = runner;
     this.onEvent = onEvent;
     this.onLog = onLog;
     this.waitForPort = waitForPort;
+    this.secretVars = secretVars;
+    this.ensureDatabase = ensureDatabase;
+    this.inspectEnv = inspectEnv;
   }
 
   get activeId() {
@@ -102,7 +115,7 @@ class Environment {
       dir: cwd,
       setupCommand: service.setupCommand || '',
       startCommand: service.startCommand || '',
-      envVars: [...(profile.envVars || []), ...(service.envVars || [])],
+      envVars: [...(profile.envVars || []), ...(service.envVars || []), ...this.secretVars(profile)],
       syncDotEnv: Boolean(profile.syncDotEnv) && cwd === profile.dir,
     };
   }
@@ -139,6 +152,18 @@ class Environment {
     }
 
     await this.activate(projectId, { reason: 'start' });
+
+    if (profile.db) {
+      try {
+        this.#emit('phase', { projectId, phase: 'database', message: '正在准备数据库环境…' });
+        const result = await this.ensureDatabase(profile);
+        if (result && result.message) {
+          this.#emit('phase', { projectId, phase: 'database', message: result.message });
+        }
+      } catch (error) {
+        this.#emit('error', { projectId, message: `数据库启动失败：${error.message}` });
+      }
+    }
 
     if (profile.autoSetup && !this.store.isSetup(projectId)) {
       this.#emit('phase', { projectId, phase: 'setup', message: '首次启动，先搭建环境…' });
@@ -205,15 +230,59 @@ class Environment {
     return { stopped };
   }
 
-  async remove(projectId) {
+  /** 按体检计划逐个安装缺失环境项，日志走「环境」服务。 */
+  async installPlan(projectId, { itemIds = null, allowToolDownload = false } = {}) {
+    const profile = this.require(projectId);
+    const inspection = await this.inspectEnv(profile.dir);
+    const plan = envcheck.buildPlan(inspection, { itemIds, allowToolDownload });
+    if (plan.steps.length === 0) {
+      throw new Error(plan.consent.length > 0 ? '需要先同意下载或升级工具' : '体检通过，没有需要安装的环境项');
+    }
+
+    await this.activate(projectId, { reason: 'setup' });
+    const context = this.derive(profile, { id: 'env', cwd: '.', setupCommand: '', startCommand: '', envVars: [] });
+    this.#emit('phase', { projectId, phase: 'setup', message: `开始安装 ${plan.steps.length} 个环境项…` });
+
+    this.#runSteps(projectId, context, plan.steps)
+      .then(() => {
+        this.store.markSetup(projectId);
+        this.#emit('setup-done', { projectId });
+      })
+      .catch((error) => {
+        this.#emit('error', { projectId, message: error.message });
+      });
+
+    return { steps: plan.steps.map((step) => step.title), started: true };
+  }
+
+  async #runSteps(projectId, context, steps) {
+    for (const step of steps) {
+      this.#emit('phase', { projectId, phase: 'setup', message: step.title });
+      const code = await this.execAndWait(context, step.command, 'setup');
+      if (code !== 0) throw new Error(`${step.title} 失败（退出码 ${code}）`);
+    }
+  }
+
+  /**
+   * 删除项目档案。removeEnv 为 true 时顺带删除项目内的环境与 DevDock 残留。
+   */
+  async remove(projectId, { removeEnv = false } = {}) {
     const profile = this.store.find(projectId);
+    let removedEnvs = [];
     if (profile) {
       await this.runner.stop(projectId, { reason: 'delete' });
       this.#restoreEnv(profile);
+      if (removeEnv) {
+        try {
+          removedEnvs = envcheck.removeEnvs(profile.dir);
+        } catch (error) {
+          this.#emit('error', { projectId, message: `删除环境失败：${error.message}` });
+        }
+      }
     }
     this.store.remove(projectId);
     this.#emit('changed', { activeId: this.store.getState().activeId });
-    return { id: projectId };
+    return { id: projectId, removedEnvs };
   }
 
   /** 退出应用前的同步清理。 */

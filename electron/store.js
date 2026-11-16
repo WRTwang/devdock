@@ -26,6 +26,22 @@ function normalizeEnvVars(raw) {
     .filter((item) => item.key.length > 0);
 }
 
+/** 只保存数据库的「怎么连」描述，口令留在内存里。 */
+function normalizeDb(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const engine = normalizeString(raw.engine).trim().toLowerCase();
+  if (!['postgres', 'mysql', 'redis', 'mongo'].includes(engine)) return null;
+  const port = Number.parseInt(String(raw.port ?? ''), 10);
+  return {
+    engine,
+    port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : null,
+    container: raw.container === true,
+    user: normalizeString(raw.user).trim(),
+    database: normalizeString(raw.database).trim(),
+    localName: normalizeString(raw.localName).trim(),
+  };
+}
+
 function normalizeProfile(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const dir = normalizeString(raw.dir).trim();
@@ -39,6 +55,7 @@ function normalizeProfile(raw) {
     startCommand: normalizeString(raw.startCommand),
     stopCommand: normalizeString(raw.stopCommand),
     envVars: normalizeEnvVars(raw.envVars),
+    db: normalizeDb(raw.db),
     syncDotEnv: raw.syncDotEnv === true,
     autoSetup: raw.autoSetup !== false,
     linkLauncher: raw.linkLauncher !== false,
