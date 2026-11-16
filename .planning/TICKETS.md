@@ -6,17 +6,25 @@
 
 | 票号 | 内容 | 主要文件 | 状态 |
 | --- | --- | --- | --- |
-| 01 | 档案模型支持 `services[]`，旧档案自动迁移为单服务 | `electron/services.js`、`electron/store.js` | 进行中 |
-| 02 | 服务依赖拓扑排序 + 环检测 | `electron/services.js` | 待办 |
-| 03 | docker-compose 多服务检测（含数据库服务识别） | `electron/detector.js` | 待办 |
-| 04 | monorepo / workspace 前后端检测 | `electron/detector.js` | 待办 |
-| 05 | 端口就绪探测（TCP connect + 超时） | `electron/probe.js` | 待办 |
-| 06 | 编排启动：按依赖顺序 + 数据库就绪门控 | `electron/environment.js` | 待办 |
-| 07 | 逆序停止与部分失败回滚 | `electron/environment.js` | 待办 |
-| 08 | 服务级日志归属（projectId + serviceId） | `electron/runner.js` | 待办 |
-| 09 | UI：服务列表编辑（增删、角色、端口、依赖） | `renderer/*` | 待办 |
-| 10 | UI：服务状态与分区日志 | `renderer/*` | 待办 |
-| 11 | 文档、CHANGELOG、数据迁移说明 | `README.md`、`CHANGELOG.md` | 待办 |
+| 01 | 档案模型支持 `services[]`，旧档案自动迁移为单服务 | `electron/services.js`、`electron/store.js` | 完成 |
+| 02 | 服务依赖拓扑排序 + 环检测 | `electron/services.js` | 完成 |
+| 03 | docker-compose 多服务检测（含数据库服务识别） | `electron/detector.js` | 完成 |
+| 04 | monorepo / workspace 前后端检测 | `electron/detector.js` | 完成 |
+| 05 | 端口就绪探测（TCP connect + 超时） | `electron/probe.js` | 完成 |
+| 06 | 编排启动：按依赖顺序 + 数据库就绪门控 | `electron/environment.js` | 完成 |
+| 07 | 逆序停止与部分失败回滚 | `electron/environment.js` | 完成 |
+| 08 | 服务级日志归属（projectId + serviceId） | `electron/runner.js` | 完成 |
+| 09 | UI：服务列表编辑（增删、角色、端口、依赖） | `renderer/*` | 完成 |
+| 10 | UI：服务状态与分区日志 | `renderer/*` | 完成 |
+| 11 | 文档、CHANGELOG、数据迁移说明 | `README.md`、`CHANGELOG.md` | 完成 |
+| 12 | README.md 命令提取（安装 / 启动 / 端口） | `electron/readme-detect.js` | 待办 |
+| 13 | 识别来源标注与优先级（README > 目录结构） | `electron/detector.js` | 待办 |
+| 14 | UI：展示识别依据，支持一键采用/手动改 | `renderer/*` | 待办 |
+| 15 | 项目内启动器生成（`.devdock/` + `devdock.cmd`） | `electron/linker.js` | 待办 |
+| 16 | `--project` 启动参数与单实例转发 | `electron/main.js` | 待办 |
+| 17 | 文档：项目内启动器与识别能力 | `README.md` | 待办 |
+
+> 约束：识别功能（12–14）验证通过之前，不生成项目内启动器（15）。
 
 ## 本票范围（01）
 

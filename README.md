@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icon.png" width="96" alt="DevDock" />
   <h1>DevDock</h1>
-  <p><strong>Windows 本地项目启动器</strong><br />录入一次路径与命令，之后一键搭环境、一键启动，切换项目自动清理旧环境。</p>
+  <p><strong>Windows 本地项目启动器</strong><br />录入一次路径与命令，之后一键搭环境、一键启动；支持前端 / 后端 / 数据库多服务编排，切换项目自动清理旧环境。</p>
   <p>
     <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?logo=windows" />
     <img alt="electron" src="https://img.shields.io/badge/Electron-45-47848F?logo=electron" />
@@ -12,7 +12,7 @@
 ---
 
 <div align="center">
-  <img src="assets/screenshot.png" alt="DevDock 主界面：左侧项目档案，右侧运行日志" width="900" />
+  <img src="assets/screenshot-config.png" alt="DevDock：一个项目包含 PostgreSQL 与 API 两个服务" width="900" />
 </div>
 
 ## 它解决什么问题
@@ -30,13 +30,16 @@ DevDock 把这些知识变成**项目档案**：
 
 | | |
 | --- | --- |
-| **项目档案** | 名称、路径、Shell、安装/启动/停止命令、环境变量，全部本地持久化 |
+| **项目档案** | 名称、路径、Shell、环境变量、服务列表，全部本地持久化 |
+| **多服务编排** | 一个项目可含前端 / 后端 / 数据库 / 后台任务，按依赖顺序启动 |
+| **数据库等待** | 为数据库服务填端口，启动后轮询 TCP 直到就绪，超时自动回滚已起的服务 |
 | **自动检测** | Node（npm/pnpm/yarn/bun）、Python（pip/poetry/uv/pipenv）、Rust、Go、.NET、Docker Compose、Ruby、Java、PHP |
-| **一键搭环境** | 执行安装命令，输出实时推送到终端面板并落盘 |
+| **项目结构识别** | 自动解析 `docker-compose.yml` 多服务、`pnpm-workspace.yaml` / `workspaces` 子包，生成对应服务 |
+| **一键搭环境** | 按依赖顺序执行各服务的安装命令，输出实时推送并落盘 |
 | **一键启动/停止** | 通过 `taskkill /T /F` 结束整棵进程树，不留孤儿进程 |
 | **环境隔离** | 子进程级注入环境变量；可选把变量写进项目 `.env`，停止或切换时自动还原 |
 | **活跃环境唯一** | 切换项目时停旧进程、还原旧 `.env`、写切换记录 |
-| **日志** | 终端风格实时输出、按项目分文件保存、一键定位日志文件 |
+| **分区日志** | 按服务筛选日志、按 `项目/服务` 分目录保存、一键定位日志文件 |
 
 ## 快速开始
 
@@ -60,11 +63,29 @@ npm start
 ## 使用
 
 1. 点右上角 **新建项目**，选择项目目录。
-2. DevDock 会自动填好安装与启动命令；不对就手动改。
-3. 需要的话展开**环境变量**，按 `KEY` / `value` 逐行添加。
-4. 保存后该项目自动成为**当前环境**。
-5. 点 **搭环境** 安装依赖（首次启动时若开启自动搭建也会先跑一次）。
-6. 点 **启动**，切到「运行日志」看输出；点 **停止** 结束进程树。
+2. DevDock 会自动识别项目类型；如果是 docker-compose 或 workspace 项目，会直接生成多个服务。
+3. 在「服务」区域检查每个服务的角色、目录、命令、端口和依赖，不对就改。
+4. 需要的话展开**环境变量**，按 `KEY` / `value` 逐行添加。
+5. 保存后该项目自动成为**当前环境**。
+6. 点 **搭环境** 按依赖顺序安装各服务依赖（首次启动时若开启自动搭建也会先跑一次）。
+7. 点 **启动**：数据库先起并等到端口就绪，再起后端，最后起前端；切到「运行日志」可按服务筛选。
+8. 点 **停止** 结束整棵进程树。
+
+### 多服务项目怎么配
+
+一个服务 = 一套「目录 + 安装命令 + 启动命令 + 端口 + 依赖」。
+
+| 角色 | 例子 | 典型配置 |
+| --- | --- | --- |
+| 数据库 | PostgreSQL / MySQL / Redis | 启动命令 `docker compose up -d db`，端口 `5432` |
+| 后端 | NestJS / Spring Boot / FastAPI | 目录 `server`，端口 `4000`，依赖数据库 |
+| 前端 | Vite / Next.js | 目录 `web`，端口 `5173`，依赖后端 |
+| 后台任务 | 队列消费者 / 定时任务 | 目录 `worker`，依赖数据库 |
+
+- **依赖**决定启动顺序；成环会拒绝启动并提示环上的服务。
+- **端口**只对数据库服务做就绪等待：DevDock 会轮询 TCP，超时（默认 60s）则回滚本次已启动的服务。
+- 没有启动命令的服务会被跳过，但如果配了端口仍会等待。
+- 同一个项目里，每个服务最多一个运行实例。
 
 ### 环境变量与 `.env`
 
@@ -93,7 +114,7 @@ npm start
 | 内容 | 位置 |
 | --- | --- |
 | 项目档案 | `%APPDATA%\DevDock\profiles.json` |
-| 运行日志 | `%APPDATA%\DevDock\logs\<projectId>\<时间>-<类型>.log` |
+| 运行日志 | `%APPDATA%\DevDock\logs\<projectId>\<serviceId>\<时间>-<类型>.log` |
 
 档案损坏时会自动备份为 `profiles.json.corrupt-<时间戳>.json` 并以空状态启动，不会静默丢数据。
 
@@ -104,6 +125,12 @@ npm start
 
 **安装脚本被 npm 拦截了？**
 首次 `npm install` 时 npm 11 会询问是否允许 `electron` 的安装脚本。允许后才能下载 Electron 二进制；否则 `npm start` 会提示找不到 Electron。可执行 `node node_modules/electron/install.js` 补装。
+
+**数据库怎么接？**
+在服务列表里加一个「数据库」服务：启动命令写 `docker compose up -d db`（或本机服务启动命令），端口填宿主机端口（如 `5432`）。DevDock 会先起它，轮询到端口通再起后端。数据库本身仍然由 Docker / 本机服务管理，DevDock 不负责安装数据库。
+
+**数据库端口一直等不到？**
+先确认容器/服务是否真的监听在 `127.0.0.1:<端口>`。如果数据库在 WSL 或远程机器上，把端口探测改成对应地址暂不支持（v1 固定探测本机回环），可先给该服务去掉端口，改为手动启动。
 
 **停止后端口仍被占用？**
 DevDock 使用 `taskkill /T /F` 结束整棵进程树，通常不会有残留。若仍占用，说明进程已脱离父进程（例如被系统服务接管），需要在任务管理器手动结束。
@@ -144,17 +171,21 @@ git push origin main --tags
 electron/
   main.js         # 窗口、IPC、生命周期
   preload.js      # contextBridge 白名单 API
-  environment.js  # 活跃环境编排：切换、启动、清理
+  environment.js  # 多服务编排：切换、按序启动、就绪门控、回滚
+  services.js     # 服务模型：归一化、旧档案迁移、拓扑排序
+  probe.js        # TCP 端口就绪探测
   store.js        # 项目档案持久化（原子写入 + 损坏自愈）
-  detector.js     # 项目类型探测
+  detector.js     # 项目类型 / docker-compose / workspace 探测
   dotenv.js       # .env 备份 / 合并 / 还原
-  runner.js       # 命令执行、进程树结束、日志广播
+  runner.js       # 命令执行、进程树结束、按服务分目录日志
 renderer/
   index.html
   styles.css
   app.js
+  service-form.js # 服务表单数据层（可单测）
+  log-filter.js   # 日志筛选与服务状态汇总（可单测）
 test/             # node:test 单元测试
-.planning/        # 需求、规格与计划
+.planning/        # 需求、规格、票清单
 ```
 
 ## 参与贡献
