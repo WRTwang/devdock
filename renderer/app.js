@@ -879,6 +879,19 @@ function bindEvents() {
   api.onLog((payload) => appendLog(payload));
 
   api.onState((payload) => {
+    if (payload.type === 'open-project') {
+      refresh()
+        .then(() => {
+          state.selectedId = payload.projectId;
+          state.tab = 'logs';
+          renderAll();
+          syncTabs();
+          const profile = profileById(payload.projectId);
+          if (profile && payload.autoStart) start(profile);
+        })
+        .catch((error) => toast(error.message, 'error'));
+      return;
+    }
     if (payload.type === 'active') {
       state.activeId = payload.activeId;
       renderAll();

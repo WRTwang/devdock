@@ -21,9 +21,33 @@ let store = null;
 let runner = null;
 let environment = null;
 let logRoot = '';
+let pendingProjectDir = null;
 
 function broadcast(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/** 从项目目录的 .devdock/project.json 导入档案，并通知界面自动启动。 */
+function handleLaunchRequest(dir) {
+  try {
+    const absolute = path.resolve(dir);
+    const snapshot = linker.readLauncher(absolute);
+    if (!snapshot) throw new Error(`没有找到 ${linker.CONFIG_DIR}/${linker.CONFIG_FILE}：${absolute}`);
+
+    const existing = store.list().find((profile) => path.resolve(profile.dir) === absolute);
+    const input = linker.snapshotToProfile(snapshot, absolute, existing ? existing.id : null);
+    if (!input) throw new Error('启动器配置不完整，请在 DevDock 里重新保存该项目');
+
+    const profile = store.saveProfile(input);
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    broadcast('state:event', { type: 'open-project', projectId: profile.id, autoStart: true });
+  } catch (error) {
+    broadcast('state:event', { type: 'error', message: error.message });
+  }
 }
 
 function publicState() {
@@ -163,6 +187,13 @@ function createWindow() {
   Menu.setApplicationMenu(null);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+  win.webContents.once('did-finish-load', () => {
+    if (!pendingProjectDir) return;
+    const dir = pendingProjectDir;
+    pendingProjectDir = null;
+    handleLaunchRequest(dir);
+  });
+
   win.once('ready-to-show', () => {
     if (process.env.DEVDOCK_HIDDEN !== '1') win.show();
     if (isDev && process.env.DEVDOCK_DEVTOOLS === '1') {
@@ -212,14 +243,17 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
+    const dir = linker.readProjectArg(argv);
+    if (dir) handleLaunchRequest(dir);
   });
 
   app.whenReady().then(() => {
+    pendingProjectDir = linker.readProjectArg(process.argv);
     app.setAppUserModelId('io.github.devdock.app');
     bootstrap();
     app.on('activate', () => {

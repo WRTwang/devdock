@@ -34,7 +34,9 @@ DevDock 把这些知识变成**项目档案**：
 | **多服务编排** | 一个项目可含前端 / 后端 / 数据库 / 后台任务，按依赖顺序启动 |
 | **数据库等待** | 为数据库服务填端口，启动后轮询 TCP 直到就绪，超时自动回滚已起的服务 |
 | **自动检测** | Node（npm/pnpm/yarn/bun）、Python（pip/poetry/uv/pipenv）、Rust、Go、.NET、Docker Compose、Ruby、Java、PHP |
+| **README 优先识别** | 先从 README 代码块提取安装 / 启动命令与端口，识别不到再退回目录结构推断，并在界面标注来源 |
 | **项目结构识别** | 自动解析 `docker-compose.yml` 多服务、`pnpm-workspace.yaml` / `workspaces` 子包，生成对应服务 |
+| **项目内启动器** | 保存时在项目目录生成 `devdock.cmd` + `.devdock/project.json`，双击即自动拉起整套服务 |
 | **一键搭环境** | 按依赖顺序执行各服务的安装命令，输出实时推送并落盘 |
 | **一键启动/停止** | 通过 `taskkill /T /F` 结束整棵进程树，不留孤儿进程 |
 | **环境隔离** | 子进程级注入环境变量；可选把变量写进项目 `.env`，停止或切换时自动还原 |

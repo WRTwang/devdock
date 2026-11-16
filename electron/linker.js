@@ -105,6 +105,30 @@ function readProjectArg(argv) {
   return null;
 }
 
+/**
+ * 把启动器快照转换成可交给 store.saveProfile 的输入。
+ * @param {object} snapshot
+ * @param {string} dir 项目实际目录（以磁盘为准，不信任快照里的旧路径）
+ * @param {string|null} existingId 已存在同目录项目时复用它，避免重复档案
+ */
+function snapshotToProfile(snapshot, dir, existingId = null) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  if (!dir || typeof dir !== 'string') return null;
+  if (!Array.isArray(snapshot.services) || snapshot.services.length === 0) return null;
+
+  return {
+    id: existingId || snapshot.id,
+    name: typeof snapshot.name === 'string' && snapshot.name.trim() ? snapshot.name.trim() : path.basename(dir),
+    dir,
+    shell: snapshot.shell === 'powershell' ? 'powershell' : 'cmd',
+    envVars: Array.isArray(snapshot.envVars) ? snapshot.envVars : [],
+    services: snapshot.services,
+    autoSetup: snapshot.autoSetup !== false,
+    syncDotEnv: snapshot.syncDotEnv === true,
+    linkLauncher: true,
+  };
+}
+
 module.exports = {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -114,4 +138,5 @@ module.exports = {
   writeLauncher,
   readLauncher,
   readProjectArg,
+  snapshotToProfile,
 };
