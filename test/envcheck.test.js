@@ -182,17 +182,91 @@ test('uv 项目：本机 uv 达标时优先用 uv sync', async () => {
   assert.equal(python.consent.length, 0);
 });
 
-test('README 写明安装步骤但目录识别不出项目时，单独成条', async () => {
+test('README 的安装步骤对不上项目类型时才单独成条', async () => {
   const dir = tempProject({
-    'README.md': '# demo\n\n```bash\npip install -r requirements.txt\n```\n',
-    'requirements.txt': '',
+    'README.md': '# demo\n\n```bash\nbundle install\n```\n',
   });
-  const result = await envcheck.inspectProject(dir, { exec: fakeExec({ python: 'Python 3.12.4' }) });
+  const result = await envcheck.inspectProject(dir, { exec: fakeExec() });
   const readme = result.items.find((item) => item.id === 'readme');
   assert.ok(readme);
   assert.equal(readme.status, 'missing');
-  assert.equal(readme.install[0], 'pip install -r requirements.txt');
+  assert.equal(readme.install[0], 'bundle install');
   assert.equal(result.readme.file, 'README.md');
+});
+
+test('README 的 venv+pip 命令并回 Python 项，不再重复成「README 安装步骤」', async () => {
+  const dir = tempProject({
+    'requirements.txt': 'flask\n',
+    'README.md': [
+      '# demo',
+      '',
+      '```bash',
+      '.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple',
+      '```',
+    ].join('\n'),
+    'venv/Scripts/python.exe': '',
+  });
+  const venvPython = path.join(dir, 'venv', 'Scripts', 'python.exe');
+  const exec = fakeExec({
+    python: 'Python 3.12.4',
+    [`${venvPython} -m pip list --format=json`]: JSON.stringify([{ name: 'flask' }]),
+  });
+  const result = await envcheck.inspectProject(dir, { exec });
+
+  assert.equal(result.items.some((item) => item.id === 'readme'), false);
+  const python = result.items.find((item) => item.id === 'python');
+  assert.equal(python.status, 'ok');
+  assert.equal(
+    python.install[0],
+    '.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple',
+  );
+  assert.match(python.evidence, /README\.md/);
+});
+
+test('README 的裸 pip 命令会改写到项目 venv，不装到系统 Python', async () => {
+  const dir = tempProject({
+    'requirements.txt': 'flask\n',
+    'README.md': '# demo\n\n```bash\npip install -r requirements.txt -i https://mirror.example/simple\n```\n',
+    '.venv/Scripts/python.exe': '',
+  });
+  const venvPython = path.join(dir, '.venv', 'Scripts', 'python.exe');
+  const exec = fakeExec({
+    python: 'Python 3.12.4',
+    [`${venvPython} -m pip list --format=json`]: JSON.stringify([{ name: 'flask' }]),
+  });
+  const result = await envcheck.inspectProject(dir, { exec });
+  const python = result.items.find((item) => item.id === 'python');
+  assert.equal(python.install.length, 1);
+  assert.equal(
+    python.install[0],
+    `"${path.join('.venv', 'Scripts', 'python.exe')}" -m pip install -r requirements.txt -i https://mirror.example/simple`,
+  );
+});
+
+test('README 指向尚未创建的 venv 时，先建环境再执行 README 命令', async () => {
+  const dir = tempProject({
+    'requirements.txt': 'flask\n',
+    'README.md': '# demo\n\n```bash\n.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt\n```\n',
+  });
+  const result = await envcheck.inspectProject(dir, { exec: fakeExec({ python: 'Python 3.12.4' }) });
+  assert.equal(result.items.some((item) => item.id === 'readme'), false);
+  const python = result.items.find((item) => item.id === 'python');
+  assert.equal(python.status, 'missing');
+  assert.deepEqual(python.install, [
+    'python -m venv venv',
+    '.\\venv\\Scripts\\python.exe -m pip install -r requirements.txt',
+  ]);
+});
+
+test('README 的 npm 安装命令并回 Node 项且优先', async () => {
+  const dir = tempProject({
+    'package.json': JSON.stringify({ scripts: { dev: 'vite' } }),
+    'README.md': '# demo\n\n```bash\nnpm ci\n```\n',
+  });
+  const result = await envcheck.inspectProject(dir, { exec: fakeExec({ node: 'v20.11.1', npm: '10.2.4' }) });
+  assert.equal(result.items.some((item) => item.id === 'readme'), false);
+  const node = result.items.find((item) => item.id === 'node');
+  assert.equal(node.install[0], 'npm ci');
 });
 
 test('数据库：compose 里的 postgres 镜像被识别，且本机服务状态可见', async () => {

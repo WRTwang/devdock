@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { detectProject, findReadme, findComposeFile } = require('./detector');
-const { extractReadmeCommands } = require('./readme-detect');
+const { extractReadmeCommands, setupEcosystem } = require('./readme-detect');
 const tools = require('./tools');
 const dbstart = require('./dbstart');
 
@@ -161,7 +161,7 @@ function pythonBuilder(dir, probed, pyproject) {
   return { kind: 'venv', label: 'python -m venv', commands: [], requires: ['python'], consent: [], note: '' };
 }
 
-function venvInstallCommand(dir, venvName, hasRequirements, hasPyproject) {
+function venvInstallCommand(dir, venvName, hasRequirements, hasPyproject, exists = false) {
   const pythonRelative = path.join(venvName, 'Scripts', 'python.exe');
   const quote = (value) => `"${value}"`;
   const create = `python -m venv ${venvName}`;
@@ -169,7 +169,60 @@ function venvInstallCommand(dir, venvName, hasRequirements, hasPyproject) {
   if (hasRequirements) install = `${quote(pythonRelative)} -m pip install -r requirements.txt`;
   else if (hasPyproject) install = `${quote(pythonRelative)} -m pip install -e .`;
   else install = `${quote(pythonRelative)} -m pip install --upgrade pip`;
-  return `${create} && ${install}`;
+  return exists ? install : `${create} && ${install}`;
+}
+
+/** 从 README 命令里认出项目自带的虚拟环境目录名（.\venv\Scripts\python.exe → venv）。 */
+function venvNameFromCommand(command) {
+  const match = /([^"'\s\\/:]+)[\\/](?:Scripts|bin)[\\/]python(?:3)?(?:\.exe)?/i.exec(String(command || ''));
+  if (!match) return null;
+  const name = match[1];
+  if (!name || name === '.' || name === '..') return null;
+  return name;
+}
+
+function venvAt(dir, name) {
+  return (
+    fs.existsSync(path.join(dir, name, 'Scripts', 'python.exe')) ||
+    fs.existsSync(path.join(dir, name, 'bin', 'python'))
+  );
+}
+
+/** 把裸 pip / python -m pip 命令改写成使用项目虚拟环境，避免装到系统 Python。 */
+function rewriteToVenv(command, venvName) {
+  const python = `"${path.join(venvName, 'Scripts', 'python.exe')}"`;
+  if (/^pip3?\s+/.test(command)) return `${python} -m ${command.replace(/^pip3?\s+/, 'pip ')}`;
+  if (/^(?:python3?|py)(?:\.exe)?\s+-m\s+pip\b/i.test(command)) {
+    return command.replace(/^(?:python3?|py)(?:\.exe)?\s+-m\s+/i, `${python} -m `);
+  }
+  return `${python} -m pip install -r requirements.txt`;
+}
+
+/**
+ * README 里的安装命令优先并回同语言的体检项：
+ * 已经指向项目内 venv 就直接用；没建 venv 就先建；裸 pip 则改写到 venv。
+ * 避免出现「Python 依赖已就绪」旁边又挂一条「README 安装步骤 缺失」。
+ */
+function mergeReadmeInstall(item, command, dir, readmeFile) {
+  if (item.id === 'python') {
+    const referenced = venvNameFromCommand(command);
+    if (referenced && venvAt(dir, referenced)) {
+      item.install = [command];
+    } else if (referenced) {
+      if (!findVenv(dir)) item.install = [`python -m venv ${referenced}`, command];
+    } else {
+      const venv = findVenv(dir);
+      const name = venv ? venv.name : '.venv';
+      item.install = venv ? [rewriteToVenv(command, name)] : [`python -m venv ${name}`, rewriteToVenv(command, name)];
+    }
+  } else {
+    item.install = [command];
+  }
+
+  if (readmeFile && !item.evidence.includes(readmeFile)) {
+    item.evidence = `${item.evidence} / ${readmeFile}`;
+  }
+  return item;
 }
 
 function missingPackages(python, required, exec) {
@@ -279,7 +332,7 @@ async function inspectPython(dir, { detection, probed, exec }) {
 
   const install = builder.commands.length
     ? builder.commands
-    : [venvInstallCommand(dir, (venv && venv.name) || '.venv', hasRequirements, hasPyproject)];
+    : [venvInstallCommand(dir, (venv && venv.name) || '.venv', hasRequirements, hasPyproject, Boolean(venv))];
 
   let status = 'ok';
   let detail = '';
@@ -478,20 +531,27 @@ async function inspectProject(dir, options = {}) {
   const dbItem = databaseItem(database);
   if (dbItem) items.push(dbItem);
 
-  // README 里写了安装步骤但清单识别不出来时，单独列一条，避免“README 说了却没人执行”
+  // README 里写了安装步骤：能对上语言的并回对应体检项（README 优先），
+  // 完全对不上的才单独列一条，避免同一件事出现两遍。
   const readmeSetup = readme && readme.setupCommand ? readme.setupCommand : '';
-  if (readmeSetup && !items.some((item) => item.install.includes(readmeSetup))) {
-    items.push({
-      id: 'readme',
-      label: 'README 安装步骤',
-      runtime: 'README',
-      status: 'missing',
-      detail: `来自 ${readmeName}：${readmeSetup}`,
-      evidence: readmeName,
-      install: [readmeSetup],
-      consent: [],
-      tools: [],
-    });
+  if (readmeSetup) {
+    const ecosystem = setupEcosystem(readmeSetup);
+    const target = ecosystem ? items.find((item) => item.id === ecosystem) : null;
+    if (target) {
+      mergeReadmeInstall(target, readmeSetup, dir, readmeName);
+    } else if (!items.some((item) => item.install.includes(readmeSetup))) {
+      items.push({
+        id: 'readme',
+        label: 'README 安装步骤',
+        runtime: 'README',
+        status: 'missing',
+        detail: `来自 ${readmeName}：${readmeSetup}`,
+        evidence: readmeName,
+        install: [readmeSetup],
+        consent: [],
+        tools: [],
+      });
+    }
   }
 
   const toolchain = [...probed.values()].map((tool) => ({

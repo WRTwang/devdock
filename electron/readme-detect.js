@@ -73,6 +73,24 @@ function classify(command) {
   return null;
 }
 
+/**
+ * 判断安装命令属于哪个生态，用于把 README 命令并回对应体检项，
+ * 避免同一件事被拆成两条（例如 venv 里的 pip install 又单列一条「README 安装步骤」）。
+ */
+function setupEcosystem(command) {
+  const normalized = normalizeForMatch(command);
+  if (/^(?:pip3?|pipx)\s+install\b/.test(normalized)) return 'python';
+  if (/^(?:python3?|py)\s+-m\s+(?:pip|venv)\b/i.test(normalized)) return 'python';
+  if (/^(?:uv\s+(?:sync|pip\s+install)|poetry\s+install|pipenv\s+install)\b/.test(normalized)) return 'python';
+  if (/^(?:npm|pnpm|yarn|bun)\s+(?:install|i|ci|add)\b/.test(normalized)) return 'node';
+  if (/^cargo\s+(?:build|fetch)\b/.test(normalized)) return 'rust';
+  if (/^go\s+mod\s+download\b/.test(normalized)) return 'go';
+  if (/^bundle\s+install\b/.test(normalized)) return 'ruby';
+  if (/^composer\s+install\b/.test(normalized)) return 'php';
+  if (/^dotnet\s+restore\b/.test(normalized)) return 'dotnet';
+  return null;
+}
+
 function nearestSection(lines, endIndex) {
   for (let i = endIndex; i >= 0; i -= 1) {
     const line = lines[i].trim();
@@ -143,4 +161,4 @@ function extractReadmeCommands(markdown) {
   return result;
 }
 
-module.exports = { extractReadmeCommands, classify };
+module.exports = { extractReadmeCommands, classify, setupEcosystem };
