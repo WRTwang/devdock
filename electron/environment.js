@@ -98,6 +98,7 @@ class Environment {
     const cwd = service.cwd && service.cwd !== '.' ? path.resolve(profile.dir, service.cwd) : profile.dir;
     return {
       ...profile,
+      serviceId: service.id,
       dir: cwd,
       setupCommand: service.setupCommand || '',
       startCommand: service.startCommand || '',

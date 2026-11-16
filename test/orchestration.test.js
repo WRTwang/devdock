@@ -57,7 +57,7 @@ function createHarness({ profile, exitCodes = {}, probeResult = () => ({ ready: 
       return 1;
     },
     exec(target, { command, kind }) {
-      calls.push({ kind, command, cwd: target.dir, envVars: target.envVars });
+      calls.push({ kind, command, cwd: target.dir, serviceId: target.serviceId, envVars: target.envVars });
       events.push(['exec', command]);
       const code = exitCodes[kind] ?? 0;
       return {
@@ -124,6 +124,16 @@ test('多服务按数据库 → 后端 → 前端顺序启动', async () => {
   assert.deepEqual(
     calls.filter((call) => call.kind === 'start').map((call) => call.command),
     ['docker compose up -d db', 'npm run start:dev', 'npm run dev'],
+  );
+});
+
+test('多服务启动时把 serviceId 传给 runner，日志可按服务归属', async () => {
+  const { env, calls } = createHarness({ profile: FULL_STACK });
+  await env.start('p1');
+
+  assert.deepEqual(
+    calls.filter((call) => call.kind === 'start').map((call) => call.serviceId),
+    ['db', 'api', 'web'],
   );
 });
 

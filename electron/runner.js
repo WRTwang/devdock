@@ -62,6 +62,7 @@ class Runner {
     return {
       running: entries.length > 0,
       kinds: [...new Set(entries.map((entry) => entry.kind))],
+      services: [...new Set(entries.map((entry) => entry.serviceId))],
       pids: entries.map((entry) => entry.pid).filter(Boolean),
       startedAt: entries.length ? Math.min(...entries.map((entry) => entry.startedAt)) : null,
     };
@@ -73,8 +74,8 @@ class Runner {
     return result;
   }
 
-  #emit(projectId, kind, stream, chunk, logFile) {
-    this.onLog({ projectId, kind, stream, chunk, ts: Date.now(), logFile });
+  #emit(projectId, serviceId, kind, stream, chunk, logFile) {
+    this.onLog({ projectId, serviceId, kind, stream, chunk, ts: Date.now(), logFile });
   }
 
   /**
@@ -87,11 +88,13 @@ class Runner {
       throw new Error(kind === 'setup' ? '还没有配置安装命令' : '还没有配置启动命令');
     }
     if (!fs.existsSync(profile.dir)) throw new Error(`项目目录不存在: ${profile.dir}`);
-    if (kind === 'start' && this.isRunning(profile.id)) {
-      throw new Error('项目已在运行中');
+
+    const serviceId = profile.serviceId || 'main';
+    if (kind === 'start' && [...this.#entries(profile.id)].some((entry) => entry.serviceId === serviceId)) {
+      throw new Error(`服务已在运行中: ${serviceId}`);
     }
 
-    const logDir = path.join(this.logRoot, profile.id);
+    const logDir = path.join(this.logRoot, profile.id, serviceId);
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, `${timestamp()}-${kind}.log`);
     const stream = fs.createWriteStream(logFile, { flags: 'a' });
@@ -127,6 +130,7 @@ class Runner {
     const entry = {
       pid: child.pid,
       kind,
+      serviceId,
       child,
       stream,
       stopping: false,
@@ -136,12 +140,12 @@ class Runner {
     };
     this.#entries(profile.id, true).add(entry);
 
-    this.#emit(profile.id, kind, 'meta', `$ ${command}\n`, logFile);
+    this.#emit(profile.id, serviceId, kind, 'meta', `$ ${command}\n`, logFile);
 
     const forward = (streamName) => (buffer) => {
       const text = buffer.toString('utf8');
       stream.write(text);
-      this.#emit(profile.id, kind, streamName, text, logFile);
+      this.#emit(profile.id, serviceId, kind, streamName, text, logFile);
     };
     child.stdout.on('data', forward('stdout'));
     child.stderr.on('data', forward('stderr'));
@@ -149,7 +153,7 @@ class Runner {
     child.on('error', (error) => {
       const text = `\n[DevDock] 启动失败: ${error.message}\n`;
       stream.write(text);
-      this.#emit(profile.id, kind, 'stderr', text, logFile);
+      this.#emit(profile.id, serviceId, kind, 'stderr', text, logFile);
     });
 
     child.on('exit', (code, signal) => {
@@ -161,19 +165,20 @@ class Runner {
       const detail = signal ? `signal=${signal}` : `code=${code}`;
       const text = `\n${prefix} (${detail})\n`;
       stream.write(text);
-      this.#emit(profile.id, kind, 'meta', text, logFile);
+      this.#emit(profile.id, serviceId, kind, 'meta', text, logFile);
       stream.end();
 
       if (profile.syncDotEnv && !this.isRunning(profile.id)) {
         try {
           dotenv.restore(profile.dir);
         } catch (error) {
-          this.#emit(profile.id, kind, 'stderr', `[DevDock] 还原 .env 失败: ${error.message}\n`, logFile);
+          this.#emit(profile.id, serviceId, kind, 'stderr', `[DevDock] 还原 .env 失败: ${error.message}\n`, logFile);
         }
       }
 
       this.onState({
         projectId: profile.id,
+        serviceId,
         kind,
         running: this.isRunning(profile.id),
         exitCode: code,
@@ -181,7 +186,7 @@ class Runner {
       });
     });
 
-    this.onState({ projectId: profile.id, kind, running: true, pid: child.pid });
+    this.onState({ projectId: profile.id, serviceId, kind, running: true, pid: child.pid });
     return { pid: child.pid, logFile, child };
   }
 
