@@ -107,6 +107,7 @@
 
           <nav class="tabs">
             <button class="tab active" data-tab="config">配置</button>
+            <button class="tab" data-tab="env">环境体检</button>
             <button class="tab" data-tab="logs">运行日志</button>
             <span class="tab-spacer"></span>
             <div class="log-tools" id="log-tools" hidden>
@@ -151,6 +152,30 @@
                 <ul class="notes" id="cfg-notes"></ul>
               </article>
             </div>
+          </div>
+
+          <div class="panel" id="panel-env" hidden>
+            <div class="env-head">
+              <div class="env-summary" id="env-summary">尚未体检</div>
+              <div class="spacer"></div>
+              <button class="link-btn" id="btn-env-refresh">重新体检</button>
+              <button class="btn btn-ghost btn-sm" id="btn-env-install" disabled>安装缺失项</button>
+            </div>
+
+            <div class="env-list" id="env-list"></div>
+
+            <section class="card db-card" id="db-card" hidden>
+              <h3>数据库</h3>
+              <div class="db-body">
+                <div class="db-info" id="db-info"></div>
+                <button class="btn btn-ghost btn-sm" id="btn-db-prepare">输入密码并启动</button>
+              </div>
+            </section>
+
+            <section class="card">
+              <h3>工具链</h3>
+              <div class="tool-list" id="tool-list"></div>
+            </section>
           </div>
 
           <div class="panel" id="panel-logs" hidden>
@@ -234,6 +259,93 @@
           <div class="spacer"></div>
           <button type="button" class="btn btn-ghost" id="btn-cancel">取消</button>
           <button type="submit" class="btn btn-primary" id="btn-save">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="editor dialog-narrow" id="env-plan-dialog">
+      <form id="env-plan-form" novalidate>
+        <header class="editor-head">
+          <h2>确认安装环境</h2>
+          <button type="button" class="btn btn-ghost btn-icon" id="env-plan-close" aria-label="关闭">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="editor-body">
+          <p class="hint" id="env-plan-note"></p>
+          <ol class="plan-list" id="env-plan-list"></ol>
+        </div>
+        <footer class="editor-foot">
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-ghost" id="btn-plan-cancel">取消</button>
+          <button type="submit" class="btn btn-primary" id="btn-plan-confirm">开始安装</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="editor dialog-narrow" id="db-dialog">
+      <form id="db-form" novalidate>
+        <header class="editor-head">
+          <h2>连接数据库</h2>
+          <button type="button" class="btn btn-ghost btn-icon" id="db-close" aria-label="关闭">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="editor-body">
+          <p class="hint" id="db-hint"></p>
+          <div class="field">
+            <label for="db-user">用户名</label>
+            <input type="text" id="db-user" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="db-name">数据库名</label>
+            <input type="text" id="db-name" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="db-password">密码 <span class="optional">只留在内存，不写入档案</span></label>
+            <input type="password" id="db-password" autocomplete="off" spellcheck="false" />
+          </div>
+          <label class="check">
+            <input type="checkbox" id="db-sync-env" checked />
+            <span>把连接串写入项目 <code>.env</code> 供服务连接（停止时自动还原）</span>
+          </label>
+          <p class="field-error" id="db-error" hidden></p>
+        </div>
+        <footer class="editor-foot">
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-ghost" id="btn-db-cancel">取消</button>
+          <button type="submit" class="btn btn-primary" id="btn-db-confirm">保存并启动</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="editor dialog-narrow" id="delete-dialog">
+      <form id="delete-form" novalidate>
+        <header class="editor-head">
+          <h2>删除项目</h2>
+          <button type="button" class="btn btn-ghost btn-icon" id="delete-close" aria-label="关闭">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="editor-body">
+          <p class="hint" id="delete-hint"></p>
+          <ul class="residue-list" id="residue-list"></ul>
+          <label class="check">
+            <input type="checkbox" id="delete-env" checked />
+            <span id="delete-env-label">同时删除项目内的环境与残留（不可恢复）</span>
+          </label>
+          <p class="hint">项目源码不会被删除。</p>
+        </div>
+        <footer class="editor-foot">
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-ghost" id="btn-delete-cancel">取消</button>
+          <button type="submit" class="btn btn-danger" id="btn-delete-confirm">确认删除</button>
         </footer>
       </form>
     </dialog>

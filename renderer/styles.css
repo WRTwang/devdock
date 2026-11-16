@@ -1083,3 +1083,214 @@ select {
     transform: none;
   }
 }
+
+/* ---------- 环境体检 ---------- */
+.status-dot.missing {
+  background: var(--amber);
+  box-shadow: 0 0 0 4px rgba(255, 181, 69, 0.12);
+}
+.status-dot.error {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgba(255, 95, 115, 0.14);
+}
+
+.env-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.env-head .spacer {
+  flex: 1;
+}
+.env-summary {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.env-summary b {
+  font-weight: 650;
+}
+
+.env-status.ok {
+  color: var(--green);
+}
+.env-status.missing {
+  color: var(--amber);
+}
+.env-status.error {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.env-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.env-item {
+  display: flex;
+  gap: 11px;
+  padding: 13px 15px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent), var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 11px;
+}
+.env-item.ok {
+  border-left-color: var(--green);
+}
+.env-item.missing {
+  border-left-color: var(--amber);
+}
+.env-item.error {
+  border-left-color: var(--red);
+}
+.env-item .status-dot {
+  margin-top: 4px;
+}
+.env-item-body {
+  flex: 1;
+  min-width: 0;
+}
+.env-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.env-item-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.env-item-detail {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+.env-command {
+  display: block;
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: #0a0c10;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: #a8c7ff;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.env-consent {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--amber);
+}
+
+.db-card {
+  margin-bottom: 14px;
+}
+.db-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.db-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tool-chip {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  color: var(--muted);
+  background: #0a0c10;
+}
+.tool-chip.ok {
+  color: var(--green);
+  border-color: rgba(53, 211, 154, 0.35);
+}
+.tool-chip.missing {
+  color: var(--amber);
+  border-color: rgba(255, 181, 69, 0.35);
+}
+
+/* ---------- 弹窗：安装计划 / 数据库 / 删除 ---------- */
+.dialog-narrow {
+  width: min(580px, calc(100vw - 60px));
+}
+.mini-tag.warn {
+  color: var(--amber);
+  border-color: rgba(255, 181, 69, 0.4);
+  background: rgba(255, 181, 69, 0.1);
+}
+.plan-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.plan-list li {
+  line-height: 1.5;
+}
+.plan-list code {
+  display: block;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: #0a0c10;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: #a8c7ff;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.residue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.residue-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #0a0c10;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--amber);
+}
+
+input[type="password"] {
+  height: 34px;
+  background: #0a0c10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 11px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input[type="password"]:focus {
+  border-color: rgba(107, 140, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(107, 140, 255, 0.13);
+}

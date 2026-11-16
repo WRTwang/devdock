@@ -18,6 +18,13 @@ const state = {
   editorServices: [],
   busy: {},
   detected: {},
+  envcheck: {},
+  envBusy: {},
+  dbReady: new Set(),
+  pendingStart: null,
+  pendingPlan: null,
+  pendingDbProfile: null,
+  pendingDelete: null,
   logs: new Map(), // projectId -> { chunks: [], logFile: string|null, bytes: number }
   autoScroll: true,
   appVersion: '',
@@ -88,6 +95,7 @@ function applyState(data) {
   state.setupAt = data.setupAt || {};
   state.running = data.running || {};
   state.appVersion = data.appVersion || '';
+  state.dbReady = new Set(Array.isArray(data.dbReady) ? data.dbReady : []);
   if (!state.selectedId || !profileById(state.selectedId)) {
     state.selectedId = state.activeId || (state.profiles[0] ? state.profiles[0].id : null);
   }
@@ -191,6 +199,7 @@ function renderDetail() {
 
   renderConfig(profile);
   renderLogServiceFilter(profile);
+  renderEnvPanel(profile);
   renderActivePill();
 }
 
@@ -334,6 +343,320 @@ function ensureDetection(id) {
     });
 }
 
+/* ---------------- 环境体检 ---------------- */
+
+const ENV_STATUS_TEXT = { ok: '已就绪', missing: '缺失', error: '异常' };
+
+async function ensureEnvcheck(id, { force = false } = {}) {
+  const profile = profileById(id);
+  if (!profile) return null;
+  if (!force && state.envcheck[id]) return state.envcheck[id];
+  if (state.envBusy[id]) return state.envcheck[id] || null;
+
+  state.envBusy[id] = true;
+  if (state.selectedId === id) renderEnvPanel(profile);
+
+  try {
+    const result = await api.inspectEnv(id);
+    state.envcheck[id] = result;
+    if (result.dbReady) state.dbReady.add(id);
+    else state.dbReady.delete(id);
+    return result;
+  } catch (error) {
+    const failed = {
+      error: error.message,
+      items: [],
+      toolchain: [],
+      database: null,
+      plan: { steps: [], consent: [], hasWork: false },
+      summary: { ok: 0, missing: 0, error: 1 },
+    };
+    state.envcheck[id] = failed;
+    toast(`环境体检失败：${error.message}`, 'error');
+    return failed;
+  } finally {
+    delete state.envBusy[id];
+    if (state.selectedId === id) renderDetail();
+  }
+}
+
+function statusDot(status) {
+  return `<span class="status-dot ${status === 'ok' ? 'running' : status}"></span>`;
+}
+
+function renderEnvPanel(profile) {
+  const data = state.envcheck[profile.id];
+  const busy = Boolean(state.envBusy[profile.id]);
+  const summary = $('env-summary');
+  const list = $('env-list');
+  const installBtn = $('btn-env-install');
+  installBtn.disabled = true;
+
+  if (!data) {
+    summary.className = 'env-summary';
+    summary.textContent = busy ? '正在体检…' : '尚未体检';
+    list.innerHTML = '';
+    renderDbCard(null, profile);
+    renderToolList([]);
+    return;
+  }
+
+  if (data.error) {
+    summary.className = 'env-summary';
+    summary.innerHTML = `<span class="env-status error">体检失败：${escapeHtml(data.error)}</span>`;
+    list.innerHTML = '';
+    renderDbCard(null, profile);
+    renderToolList([]);
+    return;
+  }
+
+  const counts = data.summary || { ok: 0, missing: 0, error: 0 };
+  summary.className = 'env-summary';
+  summary.innerHTML =
+    `已就绪 <b class="env-status ok">${counts.ok || 0}</b> · ` +
+    `缺失 <b class="env-status missing">${counts.missing || 0}</b> · ` +
+    `异常 <b class="env-status error">${counts.error || 0}</b>` +
+    (data.runtime ? ` · ${escapeHtml(data.runtime)}` : '');
+
+  list.innerHTML = data.items
+    .map((item) => {
+      const detailClass = `env-status ${item.status}`;
+      const consent = Array.isArray(item.consent) ? item.consent : [];
+      return `
+        <div class="env-item ${item.status}">
+          ${statusDot(item.status)}
+          <div class="env-item-body">
+            <div class="env-item-head">
+              <span class="env-item-name">${escapeHtml(item.label)}</span>
+              <span class="${detailClass}">${ENV_STATUS_TEXT[item.status] || item.status}</span>
+              ${item.evidence ? `<span class="mini-tag">${escapeHtml(item.evidence)}</span>` : ''}
+              <div class="spacer" style="flex:1"></div>
+              ${
+                item.status !== 'ok' && item.install && item.install.length
+                  ? `<button class="link-btn" data-install="${escapeHtml(item.id)}">安装此项</button>`
+                  : ''
+              }
+            </div>
+            <div class="env-item-detail ${detailClass}">${escapeHtml(item.detail)}</div>
+            ${item.install && item.install.length ? `<code class="env-command">${escapeHtml(item.install[0])}</code>` : ''}
+            ${
+              consent.length
+                ? `<div class="env-consent">需要先获取工具：${consent
+                    .map((plan) => escapeHtml(plan.title))
+                    .join('；')}</div>`
+                : ''
+            }
+          </div>
+        </div>`;
+    })
+    .join('');
+
+  list.querySelectorAll('[data-install]').forEach((button) => {
+    button.addEventListener('click', () => openPlanDialog(profile, [button.dataset.install]));
+  });
+
+  renderDbCard(data, profile);
+  renderToolList(data.toolchain);
+
+  const plan = data.plan || { steps: [], consent: [], hasWork: false };
+  installBtn.disabled = busy || !plan.hasWork;
+}
+
+function renderToolList(toolchain) {
+  const box = $('tool-list');
+  if (!toolchain || toolchain.length === 0) {
+    box.innerHTML = '<span class="mini-tag">未检测到运行时工具</span>';
+    return;
+  }
+  box.innerHTML = toolchain
+    .map((tool) => {
+      const status = tool.ok ? 'ok' : 'missing';
+      const text = tool.found ? `${tool.label} ${tool.version || ''}`.trim() : `${tool.label} 未安装`;
+      const title = tool.found && !tool.ok ? `需要 ≥ ${tool.minimum}` : '';
+      return `<span class="tool-chip ${status}" title="${escapeHtml(title)}">${escapeHtml(text)}</span>`;
+    })
+    .join('');
+}
+
+function renderDbCard(data, profile) {
+  const card = $('db-card');
+  const database = data && data.database;
+  if (!database) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const ready = state.dbReady.has(profile.id);
+  const mode = database.container
+    ? 'Docker 容器'
+    : database.local
+      ? `本机服务 ${database.local.name}${database.local.running ? '（运行中）' : '（未启动）'}`
+      : '未检测到本机服务';
+  const hint = database.container
+    ? ready
+      ? '连接串已注入；容器由 docker compose 启动'
+      : '容器由 docker compose 启动；需要连接串时在右侧填写'
+    : ready
+      ? '连接串已注入，启动项目时会自动带上'
+      : '还没有输入密码，启动前会先询问';
+
+  $('db-info').innerHTML = `
+    <div><b class="env-status ok">${escapeHtml(database.label)}</b>
+      <span class="mini-tag">端口 ${database.port}</span>
+      <span class="mini-tag">${escapeHtml(mode)}</span>
+    </div>
+    <div class="env-item-detail ${ready ? 'env-status ok' : 'env-status missing'}">
+      ${hint}
+    </div>`;
+  $('btn-db-prepare').textContent = ready ? '重新输入密码' : '输入密码并启动';
+}
+
+function openPlanDialog(profile, itemIds) {
+  const data = state.envcheck[profile.id];
+  if (!data || !data.plan) return;
+  const plan = data.plan;
+  const wanted = itemIds ? new Set(itemIds) : null;
+  const pick = (step) => (wanted ? wanted.has(step.itemId) : true);
+  const steps = plan.steps.filter(pick);
+  const consents = plan.consent.filter(pick);
+  const all = [...consents, ...steps];
+
+  if (all.length === 0) {
+    toast('没有需要安装的环境项', 'error');
+    return;
+  }
+
+  state.pendingPlan = { projectId: profile.id, itemIds, allowToolDownload: consents.length > 0 };
+  $('env-plan-note').textContent = consents.length
+    ? '带「需下载」的步骤会联网并修改本机工具，只有点确认后才会执行。'
+    : '下面这些命令会在项目目录里执行，输出会出现在运行日志里。';
+  $('env-plan-list').innerHTML = all
+    .map(
+      (step) => `
+      <li>
+        <div>${escapeHtml(step.title)}${step.needsConsent ? '<span class="mini-tag warn">需下载</span>' : ''}</div>
+        <code>${escapeHtml(step.command)}</code>
+      </li>`,
+    )
+    .join('');
+  $('btn-plan-confirm').textContent = consents.length ? '同意并安装' : '开始安装';
+  $('env-plan-dialog').showModal();
+}
+
+async function confirmPlan() {
+  const pending = state.pendingPlan;
+  if (!pending) return;
+  const { projectId, itemIds, allowToolDownload } = pending;
+  state.pendingPlan = null;
+  $('env-plan-dialog').close();
+
+  state.envBusy[projectId] = 'install';
+  renderDetail();
+  try {
+    await api.installEnv(projectId, { itemIds, allowToolDownload });
+    state.tab = 'logs';
+    syncTabs();
+    toast('开始安装环境，日志已切换到「运行日志」');
+  } catch (error) {
+    delete state.envBusy[projectId];
+    renderDetail();
+    toast(error.message, 'error');
+  }
+}
+
+function openDbDialog(profile, database) {
+  state.pendingDbProfile = profile.id;
+  const mode = database.container
+    ? 'Docker 容器（docker compose 负责启动）'
+    : database.local
+      ? `本机服务 ${database.local.name}${database.local.running ? '（运行中）' : '（未启动）'}`
+      : '未检测到本机服务，请先安装数据库';
+  $('db-hint').textContent = `${database.label} · 端口 ${database.port} · ${mode}`;
+  $('db-user').value = database.user || '';
+  $('db-name').value = database.database || '';
+  $('db-password').value = '';
+  $('db-sync-env').checked = true;
+  $('db-error').hidden = true;
+  $('db-dialog').showModal();
+  setTimeout(() => $('db-password').focus(), 30);
+}
+
+async function submitDbDialog(event) {
+  event.preventDefault();
+  const profile = profileById(state.pendingDbProfile);
+  if (!profile) return;
+  const button = $('btn-db-confirm');
+  button.disabled = true;
+
+  try {
+    const result = await api.prepareDb(profile.id, {
+      user: $('db-user').value,
+      database: $('db-name').value,
+      password: $('db-password').value,
+      syncDotEnv: $('db-sync-env').checked,
+    });
+    state.dbReady.add(profile.id);
+    $('db-dialog').close();
+    state.pendingDbProfile = null;
+
+    const failed = result.started && result.started.ok === false;
+    toast(failed ? `${result.label} 连接串已保存；${result.started.message}` : `${result.label} 已就绪`, failed ? 'error' : 'success');
+    state.envcheck[profile.id] = null;
+    ensureEnvcheck(profile.id, { force: true });
+
+    const pending = state.pendingStart;
+    state.pendingStart = null;
+    if (pending === profile.id) start(profile);
+  } catch (error) {
+    $('db-error').textContent = error.message;
+    $('db-error').hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function openDeleteDialog(profile) {
+  const residues = await api.envResidue(profile.dir).catch(() => []);
+  state.pendingDelete = profile;
+  const has = residues.length > 0;
+  $('delete-hint').textContent = `将从 DevDock 删除「${profile.name}」的档案，项目源码不会被删除。`;
+  $('delete-env').checked = has;
+  $('delete-env').disabled = !has;
+  $('delete-env-label').textContent = has
+    ? '同时删除项目内的环境与残留（不可恢复）'
+    : '项目里没有发现环境残留';
+  $('residue-list').hidden = !has;
+  $('residue-list').innerHTML = residues
+    .map(
+      (item) =>
+        `<li><span>${escapeHtml(item.name)}</span><span class="mini-tag">${item.kind === 'env' ? '环境' : '残留'}</span></li>`,
+    )
+    .join('');
+  $('delete-dialog').showModal();
+}
+
+async function confirmDelete() {
+  const profile = state.pendingDelete;
+  if (!profile) return;
+  const removeEnv = $('delete-env').checked;
+  state.pendingDelete = null;
+  $('delete-dialog').close();
+
+  try {
+    const result = await api.remove(profile.id, { removeEnv });
+    state.logs.delete(profile.id);
+    delete state.envcheck[profile.id];
+    delete state.detected[profile.id];
+    state.dbReady.delete(profile.id);
+    if (state.selectedId === profile.id) state.selectedId = null;
+    await refresh();
+    const count = result && Array.isArray(result.removedEnvs) ? result.removedEnvs.length : 0;
+    toast(removeEnv ? `档案已删除，清理了 ${count} 项环境残留` : '档案已删除', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 /* ---------------- 日志 ---------------- */
 
 function logStore(projectId) {
@@ -418,9 +741,11 @@ function syncTabs() {
     tab.classList.toggle('active', tab.dataset.tab === state.tab);
   });
   $('panel-config').hidden = state.tab !== 'config';
+  $('panel-env').hidden = state.tab !== 'env';
   $('panel-logs').hidden = state.tab !== 'logs';
   $('log-tools').hidden = state.tab !== 'logs';
   if (state.tab === 'logs') renderLogs();
+  if (state.tab === 'env' && state.selectedId) ensureEnvcheck(state.selectedId);
 }
 
 /* ---------------- 动作 ---------------- */
@@ -433,6 +758,13 @@ async function activate(profile) {
 }
 
 async function start(profile) {
+  const inspection = state.envcheck[profile.id] || (await ensureEnvcheck(profile.id));
+  if (inspection && inspection.database && !inspection.database.container && !state.dbReady.has(profile.id)) {
+    state.pendingStart = profile.id;
+    openDbDialog(profile, inspection.database);
+    return;
+  }
+
   state.busy[profile.id] = 'start';
   renderDetail();
   try {
@@ -471,17 +803,7 @@ async function stop(profile) {
 }
 
 async function remove(profile) {
-  if (!window.confirm(`确定删除「${profile.name}」吗？\n只会删除 DevDock 里的档案，不会动项目文件。`)) return;
-  try {
-    await api.remove(profile.id);
-    state.logs.delete(profile.id);
-    delete state.detected[profile.id];
-    if (state.selectedId === profile.id) state.selectedId = null;
-    await refresh();
-    toast('档案已删除');
-  } catch (error) {
-    toast(error.message, 'error');
-  }
+  await openDeleteDialog(profile);
 }
 
 /* ---------------- 编辑器 ---------------- */
@@ -819,6 +1141,52 @@ function bindEvents() {
     if (profile) api.openDir(profile.dir).catch((e) => toast(e.message, 'error'));
   });
 
+  $('btn-env-refresh').addEventListener('click', () => {
+    const profile = selectedProfile();
+    if (profile) ensureEnvcheck(profile.id, { force: true });
+  });
+  $('btn-env-install').addEventListener('click', () => {
+    const profile = selectedProfile();
+    if (profile) openPlanDialog(profile, null);
+  });
+  $('btn-db-prepare').addEventListener('click', () => {
+    const profile = selectedProfile();
+    const data = profile ? state.envcheck[profile.id] : null;
+    if (profile && data && data.database) openDbDialog(profile, data.database);
+  });
+
+  $('env-plan-close').addEventListener('click', () => $('env-plan-dialog').close());
+  $('btn-plan-cancel').addEventListener('click', () => $('env-plan-dialog').close());
+  $('env-plan-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    confirmPlan();
+  });
+
+  $('db-close').addEventListener('click', () => {
+    state.pendingDbProfile = null;
+    state.pendingStart = null;
+    $('db-dialog').close();
+  });
+  $('btn-db-cancel').addEventListener('click', () => {
+    state.pendingDbProfile = null;
+    state.pendingStart = null;
+    $('db-dialog').close();
+  });
+  $('db-form').addEventListener('submit', submitDbDialog);
+
+  $('delete-close').addEventListener('click', () => {
+    state.pendingDelete = null;
+    $('delete-dialog').close();
+  });
+  $('btn-delete-cancel').addEventListener('click', () => {
+    state.pendingDelete = null;
+    $('delete-dialog').close();
+  });
+  $('delete-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    confirmDelete();
+  });
+
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       state.tab = tab.dataset.tab;
@@ -922,13 +1290,21 @@ function bindEvents() {
     }
     if (payload.type === 'setup-done') {
       delete state.busy[payload.projectId];
+      delete state.envBusy[payload.projectId];
       state.setupAt[payload.projectId] = Date.now();
       renderAll();
       toast('环境搭建完成', 'success');
+      ensureEnvcheck(payload.projectId, { force: true });
+      return;
+    }
+    if (payload.type === 'db-ready') {
+      state.dbReady.add(payload.projectId);
+      renderDetail();
       return;
     }
     if (payload.type === 'error') {
       delete state.busy[payload.projectId];
+      delete state.envBusy[payload.projectId];
       renderDetail();
       toast(payload.message, 'error');
       return;

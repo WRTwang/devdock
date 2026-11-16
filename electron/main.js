@@ -7,6 +7,8 @@ const { Store } = require('./store');
 const { detectProject } = require('./detector');
 const { Runner } = require('./runner');
 const { Environment } = require('./environment');
+const envcheck = require('./envcheck');
+const dbstart = require('./dbstart');
 const linker = require('./linker');
 
 const isDev = !app.isPackaged;
@@ -22,6 +24,37 @@ let runner = null;
 let environment = null;
 let logRoot = '';
 let pendingProjectDir = null;
+// 数据库口令只放内存：进程退出即消失，不写 profiles.json
+const dbSecrets = new Map();
+
+/** 把体检到的数据库描述持久化到档案，供下次启动前自启本机服务。 */
+function persistDatabase(profile, database) {
+  const db = database
+    ? {
+        engine: database.engine,
+        port: database.port,
+        container: database.container,
+        user: database.user,
+        database: database.database,
+        localName: database.local ? database.local.name : '',
+      }
+    : null;
+  if (JSON.stringify(profile.db || null) === JSON.stringify(db)) return profile;
+  return store.saveProfile({ ...profile, db });
+}
+
+/** 启动项目前确保本机数据库服务已运行（容器数据库交给 docker compose）。 */
+async function ensureDatabase(profile) {
+  const secret = dbSecrets.get(profile.id);
+  if (!profile.db || !secret) return null;
+  if (profile.db.container) return null;
+  if (!profile.db.localName) return null;
+
+  const services = await dbstart.findLocalServices();
+  const local = services.find((service) => service.name === profile.db.localName);
+  if (local && local.running) return { message: `${local.name} 已在运行` };
+  return dbstart.startLocalService(profile.db.localName);
+}
 
 function broadcast(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -61,6 +94,7 @@ function publicState() {
     dataDir: app.getPath('userData'),
     logRoot,
     platform: process.platform,
+    dbReady: [...dbSecrets.keys()],
   };
 }
 
@@ -110,9 +144,72 @@ function registerIpc() {
     });
   });
 
-  handle('profiles:delete', (id) => environment.remove(id));
+  handle('profiles:delete', async (id, options) => {
+    const result = await environment.remove(id, options || {});
+    dbSecrets.delete(id);
+    return result;
+  });
 
   handle('profiles:detect', (dir) => detectProject(dir));
+
+  handle('env:inspect', async (id) => {
+    const profile = store.find(id);
+    if (!profile) throw new Error('项目不存在，可能已被删除');
+    const inspection = await envcheck.inspectProject(profile.dir);
+    const saved = persistDatabase(profile, inspection.database);
+    return {
+      ...inspection,
+      plan: envcheck.buildPlan(inspection),
+      dbReady: dbSecrets.has(saved.id),
+    };
+  });
+
+  handle('env:install', (id, options) => environment.installPlan(id, options || {}));
+
+  handle('env:residue', (dir) => {
+    const target = path.resolve(String(dir || ''));
+    if (!dir || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) return [];
+    return envcheck.listEnvResidue(target);
+  });
+
+  handle('db:prepare', async (id, input) => {
+    const profile = store.find(id);
+    if (!profile) throw new Error('项目不存在，可能已被删除');
+    const options = input && typeof input === 'object' ? input : {};
+    const inspection = await envcheck.inspectProject(profile.dir);
+    const database = inspection.database;
+    if (!database) throw new Error('没有检测到数据库环境');
+
+    const secret = {
+      password: String(options.password ?? ''),
+      user: String(options.user || '').trim() || database.user,
+      database: String(options.database || '').trim() || database.database,
+    };
+    const envVars = dbstart.buildEnvVars(database, secret);
+    dbSecrets.set(profile.id, { envVars, engine: database.engine });
+
+    store.saveProfile({
+      ...profile,
+      db: {
+        engine: database.engine,
+        port: database.port,
+        container: database.container,
+        user: secret.user,
+        database: secret.database,
+        localName: database.local ? database.local.name : '',
+      },
+      syncDotEnv: options.syncDotEnv === false ? profile.syncDotEnv : true,
+    });
+
+    let started = null;
+    if (!database.container && database.local && !database.local.running) {
+      started = await dbstart.startLocalService(database.local.name);
+    }
+
+    const url = dbstart.buildDatabaseUrl(database, secret).replace(/:([^:@/]*)@/, ':***@');
+    broadcast('state:event', { type: 'db-ready', projectId: profile.id, engine: database.engine });
+    return { engine: database.engine, label: database.label, url, started, container: database.container };
+  });
 
   handle('dialog:pickDir', async () => {
     const result = await dialog.showOpenDialog(win, {
@@ -233,6 +330,11 @@ function bootstrap() {
     runner,
     onEvent: (payload) => broadcast('state:event', payload),
     onLog: (payload) => broadcast('log:event', payload),
+    secretVars: (profile) => {
+      const secret = dbSecrets.get(profile.id);
+      return secret ? secret.envVars : [];
+    },
+    ensureDatabase,
   });
 
   registerIpc();
