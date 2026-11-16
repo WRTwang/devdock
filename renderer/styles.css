@@ -1327,3 +1327,8 @@ input[type="password"]:focus {
   word-break: break-all;
   user-select: text;
 }
+
+/* stderr 里的普通进度 / 警告不要整片标红 */
+.terminal .line-warn {
+  color: var(--amber);
+}

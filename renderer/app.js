@@ -3,6 +3,7 @@
 const api = window.devdock;
 const ServiceForm = window.DevDockServiceForm;
 const LogFilter = window.DevDockLogFilter;
+const LogSeverity = window.DevDockLogSeverity;
 const DescribeDetection = window.DevDockDetectSummary;
 const $ = (id) => document.getElementById(id);
 
@@ -26,6 +27,7 @@ const state = {
   pendingDbProfile: null,
   pendingDelete: null,
   issue: null,
+  logClassifiers: new Map(),
   logs: new Map(), // projectId -> { chunks: [], logFile: string|null, bytes: number }
   autoScroll: true,
   appVersion: '',
@@ -646,6 +648,7 @@ async function confirmDelete() {
   try {
     const result = await api.remove(profile.id, { removeEnv });
     state.logs.delete(profile.id);
+    state.logClassifiers.delete(profile.id);
     delete state.envcheck[profile.id];
     delete state.detected[profile.id];
     state.dbReady.delete(profile.id);
@@ -747,27 +750,41 @@ function appendLog(payload) {
 
   if (state.selectedId === projectId && state.tab === 'logs') {
     if (!state.logFilter || state.logFilter === serviceId) {
-      appendLogDom(stream, chunk);
+      appendLogDom(stream, chunk, projectId);
     }
   }
 }
 
-function lineClass(stream) {
-  if (stream === 'stderr') return 'line-stderr';
-  if (stream === 'meta') return 'line-meta';
-  if (stream === 'system') return 'line-system';
-  return '';
+function classifierFor(projectId) {
+  const key = projectId || 'main';
+  let classifier = state.logClassifiers.get(key);
+  if (!classifier) {
+    classifier = LogSeverity.createClassifier();
+    state.logClassifiers.set(key, classifier);
+  }
+  return classifier;
 }
 
-function appendLogDom(stream, text) {
+function appendLogSpan(output, className, text) {
+  const span = document.createElement('span');
+  span.className = className;
+  span.textContent = text;
+  output.appendChild(span);
+}
+
+function appendLogDom(stream, text, projectId) {
   const output = $('log-output');
   const placeholder = output.querySelector('.placeholder');
   if (placeholder) placeholder.remove();
 
-  const span = document.createElement('span');
-  span.className = lineClass(stream);
-  span.textContent = text;
-  output.appendChild(span);
+  const classify = classifierFor(projectId);
+  const lines = LogSeverity.splitLines(text);
+  lines.forEach((line, index) => {
+    const className = classify(stream, line);
+    const content = line + (index === lines.length - 1 ? '' : '\n');
+    if (!content) return;
+    appendLogSpan(output, className, content);
+  });
 
   if (state.autoScroll) output.scrollTop = output.scrollHeight;
 }
@@ -789,13 +806,21 @@ function renderLogs() {
   }
 
   const fragment = document.createDocumentFragment();
+  const classify = LogSeverity.createClassifier();
   for (const chunk of visible) {
-    const span = document.createElement('span');
-    span.className = lineClass(chunk.stream);
-    span.textContent = chunk.text;
-    fragment.appendChild(span);
+    const lines = LogSeverity.splitLines(chunk.text);
+    lines.forEach((line, index) => {
+      const className = classify(chunk.stream, line);
+      const content = line + (index === lines.length - 1 ? '' : '\n');
+      if (!content) return;
+      const span = document.createElement('span');
+      span.className = className;
+      span.textContent = content;
+      fragment.appendChild(span);
+    });
   }
   output.appendChild(fragment);
+  state.logClassifiers.set(state.selectedId, LogSeverity.createClassifier());
   output.scrollTop = output.scrollHeight;
 }
 
@@ -1291,6 +1316,7 @@ function bindEvents() {
       store.chunks = [];
       store.bytes = 0;
     }
+    state.logClassifiers.delete(state.selectedId);
     renderLogs();
   });
 

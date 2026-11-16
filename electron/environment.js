@@ -167,7 +167,6 @@ class Environment {
 
     if (profile.db) {
       try {
-        this.#emit('phase', { projectId, phase: 'database', message: '正在准备数据库环境…' });
         const result = await this.ensureDatabase(profile);
         if (result && result.message) {
           this.#emit('phase', { projectId, phase: 'database', message: result.message });
