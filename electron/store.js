@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { resolveServices } = require('./services');
 
 const STATE_VERSION = 1;
 
@@ -29,7 +30,7 @@ function normalizeProfile(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const dir = normalizeString(raw.dir).trim();
   if (!dir) return null;
-  return {
+  const profile = {
     id: normalizeString(raw.id) || crypto.randomUUID(),
     name: normalizeString(raw.name).trim() || path.basename(dir),
     dir,
@@ -43,6 +44,8 @@ function normalizeProfile(raw) {
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     lastUsedAt: Number.isFinite(raw.lastUsedAt) ? raw.lastUsedAt : null,
   };
+  profile.services = resolveServices({ ...profile, services: raw.services });
+  return profile;
 }
 
 function normalizeState(raw) {
