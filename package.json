@@ -1,7 +1,7 @@
 {
   "name": "devdock",
   "productName": "DevDock",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Windows 本地项目启动器：一键搭环境、一键启动，切换项目自动清理旧环境",
   "main": "electron/main.js",
   "author": "DevDock contributors",
