@@ -31,6 +31,143 @@ function globFirst(dir, ext) {
   }
 }
 
+const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const DATABASE_IMAGE_HINTS = [
+  'postgres',
+  'postgresql',
+  'mysql',
+  'mariadb',
+  'mongo',
+  'mongodb',
+  'redis',
+  'valkey',
+  'couchdb',
+  'clickhouse',
+];
+
+function findComposeFile(dir) {
+  return COMPOSE_FILES.find((name) => exists(dir, name)) || null;
+}
+
+function roleForImage(image) {
+  const value = String(image || '').toLowerCase();
+  return DATABASE_IMAGE_HINTS.some((hint) => value.includes(hint)) ? 'database' : 'app';
+}
+
+function parsePort(value) {
+  const clean = String(value).split('/')[0];
+  const parts = clean.split(':');
+  const candidate = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+  const port = Number.parseInt(candidate, 10);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+/**
+ * 极简 docker-compose 解析：只提取服务名、镜像、宿主机端口、depends_on。
+ * 不引入 YAML 依赖，只支持缩进块写法与行内数组写法。
+ */
+function parseComposeServices(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const services = [];
+  let inServices = false;
+  let serviceIndent = null;
+  let current = null;
+  let section = null;
+
+  const createService = (name) => ({
+    id: name,
+    name,
+    role: 'app',
+    cwd: '.',
+    setupCommand: '',
+    startCommand: `docker compose up -d ${name}`,
+    port: null,
+    envVars: [],
+    dependsOn: [],
+    image: '',
+  });
+
+  const finish = () => {
+    if (!current) return;
+    current.role = roleForImage(current.image);
+    delete current.image;
+    services.push(current);
+    current = null;
+    section = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+#.*$/, '');
+    if (!line.trim()) continue;
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.trim();
+
+    if (indent === 0) {
+      finish();
+      inServices = /^services:\s*$/.test(trimmed);
+      serviceIndent = null;
+      continue;
+    }
+    if (!inServices) continue;
+
+    if (serviceIndent === null) {
+      const match = trimmed.match(/^([A-Za-z0-9_.-]+):\s*$/);
+      if (!match) continue;
+      serviceIndent = indent;
+      current = createService(match[1]);
+      continue;
+    }
+
+    if (indent === serviceIndent) {
+      finish();
+      const match = trimmed.match(/^([A-Za-z0-9_.-]+):\s*$/);
+      if (match) current = createService(match[1]);
+      continue;
+    }
+
+    if (indent <= serviceIndent || !current) continue;
+
+    if (trimmed.startsWith('-')) {
+      const value = trimmed.slice(1).trim().replace(/^["']|["']$/g, '');
+      if (section === 'ports') {
+        const port = parsePort(value);
+        if (port) current.port = port;
+      } else if (section === 'depends_on') {
+        current.dependsOn.push(value);
+      }
+      continue;
+    }
+
+    const match = trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!match) continue;
+    const key = match[1];
+    const value = match[2].trim();
+
+    if (key === 'image') {
+      current.image = value;
+      section = null;
+    } else if (key === 'build') {
+      current.image = '';
+      section = null;
+    } else if (key === 'ports') {
+      section = 'ports';
+    } else if (key === 'depends_on') {
+      section = 'depends_on';
+      if (value.startsWith('[') && value.endsWith(']')) {
+        for (const item of value.slice(1, -1).split(',')) {
+          const dep = item.trim().replace(/^["']|["']$/g, '');
+          if (dep) current.dependsOn.push(dep);
+        }
+      }
+    } else {
+      section = null;
+    }
+  }
+
+  finish();
+  return services;
+}
+
 function detectNode(dir, result) {
   if (!exists(dir, 'package.json')) return false;
   const pkg = readJson(dir, 'package.json') || {};
@@ -128,9 +265,8 @@ function detectDotnet(dir, result) {
 }
 
 function detectDocker(dir, result) {
-  if (!exists(dir, 'docker-compose.yml') && !exists(dir, 'docker-compose.yaml') && !exists(dir, 'compose.yml') && !exists(dir, 'compose.yaml')) {
-    return false;
-  }
+  const composeFile = findComposeFile(dir);
+  if (!composeFile) return false;
   result.runtime = 'Docker Compose';
   result.startCommand = 'docker compose up';
   result.notes.push('容器项目，停止时请用 docker compose down');
@@ -191,6 +327,7 @@ function detectProject(dir) {
     runtime: null,
     setupCommand: '',
     startCommand: '',
+    services: [],
     notes: [],
     dir,
   };
@@ -211,10 +348,35 @@ function detectProject(dir) {
     if (detector(dir, result)) break;
   }
 
+  const composeFile = findComposeFile(dir);
+  if (composeFile) {
+    const composeServices = parseComposeServices(readText(dir, composeFile));
+    if (composeServices.length > 0) {
+      result.services = composeServices;
+      const dataIds = composeServices.filter((service) => service.role === 'database').map((service) => service.id);
+
+      if (result.runtime && result.runtime !== 'Docker Compose') {
+        const appId = composeServices.some((service) => service.id === 'main') ? 'main-app' : 'main';
+        result.services.push({
+          id: appId,
+          name: path.basename(dir),
+          role: 'app',
+          cwd: '.',
+          setupCommand: result.setupCommand,
+          startCommand: result.startCommand,
+          port: null,
+          envVars: [],
+          dependsOn: dataIds,
+        });
+        result.notes.push(`已把 ${dataIds.length} 个数据库服务设为主应用的依赖`);
+      }
+    }
+  }
+
   if (!result.runtime) {
     result.notes.push('未识别项目类型，请手动填写安装与启动命令');
   }
   return result;
 }
 
-module.exports = { detectProject };
+module.exports = { detectProject, parseComposeServices, parsePort, roleForImage };
