@@ -89,6 +89,31 @@ npm start
 - 没有启动命令的服务会被跳过，但如果配了端口仍会等待。
 - 同一个项目里，每个服务最多一个运行实例。
 
+### 自动识别命令
+
+保存项目时 DevDock 会做两轮识别，优先级从高到低：
+
+1. **README.md 代码块**：提取 `npm install` / `pnpm dev` / `uvicorn ... --port 8000` 这类命令和端口。
+2. **目录结构**：`package.json`、`requirements.txt`、`Cargo.toml`、`docker-compose.yml`、workspace 配置等。
+
+识别结果会在弹窗里标注来源（例如「启动命令来自 README.md」）。识别错了直接在服务里改，保存后以你的版本为准。多服务项目里，README 的整体命令不会强行套到每个服务，只作为提示。
+
+### 项目内启动器
+
+保存项目时（可在弹窗里关闭）会在项目目录写入两个文件：
+
+```
+<项目>/
+  devdock.cmd              # 双击入口
+  .devdock/project.json    # 服务快照
+```
+
+双击 `devdock.cmd` 会打开 DevDock、导入这次快照并自动按依赖顺序启动全部服务——不用再开终端敲前端 / 后端 / 数据库命令。
+
+- 脚本里记录的是**当前 DevDock 的安装路径**，重装或移动后重新保存一次项目即可刷新。
+- 只写这两个文件，不碰源码；建议把 `.devdock/` 和 `devdock.cmd` 加进项目 `.gitignore`（如果不想提交）。
+- 多开时只会复用一个 DevDock 实例：再次双击另一个项目的启动器，会把项目切过去。
+
 ### 环境变量与 `.env`
 
 - 默认只注入到 DevDock 启动的子进程，不污染系统，也不改你的文件。
@@ -131,6 +156,12 @@ npm start
 **数据库怎么接？**
 在服务列表里加一个「数据库」服务：启动命令写 `docker compose up -d db`（或本机服务启动命令），端口填宿主机端口（如 `5432`）。DevDock 会先起它，轮询到端口通再起后端。数据库本身仍然由 Docker / 本机服务管理，DevDock 不负责安装数据库。
 
+**双击 devdock.cmd 提示找不到启动器？**
+脚本里写的是生成时的 DevDock 安装路径。重装或移动后，在 DevDock 里重新保存一次该项目即可刷新路径。
+
+**识别出来的命令不对？**
+按 README → 目录结构的顺序识别，结果会在弹窗标注来源。直接改服务里的命令并保存，下次以你的版本为准。
+
 **数据库端口一直等不到？**
 先确认容器/服务是否真的监听在 `127.0.0.1:<端口>`。如果数据库在 WSL 或远程机器上，把端口探测改成对应地址暂不支持（v1 固定探测本机回环），可先给该服务去掉端口，改为手动启动。
 
@@ -171,13 +202,15 @@ git push origin main --tags
 
 ```
 electron/
-  main.js         # 窗口、IPC、生命周期
+  main.js         # 窗口、IPC、--project 启动参数、生命周期
   preload.js      # contextBridge 白名单 API
   environment.js  # 多服务编排：切换、按序启动、就绪门控、回滚
   services.js     # 服务模型：归一化、旧档案迁移、拓扑排序
+  detector.js     # 项目类型 / docker-compose / workspace / README 探测
+  readme-detect.js# README 代码块提取安装、启动命令与端口
+  linker.js       # 项目内启动器生成与导入
   probe.js        # TCP 端口就绪探测
   store.js        # 项目档案持久化（原子写入 + 损坏自愈）
-  detector.js     # 项目类型 / docker-compose / workspace 探测
   dotenv.js       # .env 备份 / 合并 / 还原
   runner.js       # 命令执行、进程树结束、按服务分目录日志
 renderer/
@@ -186,6 +219,7 @@ renderer/
   app.js
   service-form.js # 服务表单数据层（可单测）
   log-filter.js   # 日志筛选与服务状态汇总（可单测）
+  detect-summary.js # 识别来源说明（可单测）
 test/             # node:test 单元测试
 .planning/        # 需求、规格、票清单
 ```
