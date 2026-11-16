@@ -146,17 +146,31 @@ class Environment {
       this.#emit('setup-done', { projectId });
     }
 
-    for (const service of services) {
-      if (!service.startCommand || !service.startCommand.trim()) {
-        await this.#waitReady(profile, service);
-        continue;
-      }
+    const started = [];
+    try {
+      for (const service of services) {
+        if (!service.startCommand || !service.startCommand.trim()) {
+          await this.#waitReady(profile, service);
+          continue;
+        }
 
-      this.runner.exec(this.derive(profile, service), { command: service.startCommand, kind: 'start' });
+        this.runner.exec(this.derive(profile, service), { command: service.startCommand, kind: 'start' });
+        started.push(service.id);
 
-      if (service.role === 'database') {
-        await this.#waitReady(profile, service);
+        if (service.role === 'database') {
+          await this.#waitReady(profile, service);
+        }
       }
+    } catch (error) {
+      if (started.length > 0) {
+        try {
+          await this.runner.stop(projectId, { reason: 'rollback' });
+        } catch {
+          /* 回滚尽力而为 */
+        }
+        this.#emit('rolled-back', { projectId, started });
+      }
+      throw error;
     }
 
     return { starting: true };

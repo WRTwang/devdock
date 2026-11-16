@@ -231,3 +231,35 @@ test('没有启动命令的服务可以被跳过但仍等待端口', async () =>
   );
   assert.ok(events.some((event) => event[0] === 'probe' && event[1] === 5432));
 });
+
+test('数据库未就绪时回滚已启动的进程', async () => {
+  const { env, runner } = createHarness({
+    profile: FULL_STACK,
+    probeResult: () => ({ ready: false, elapsedMs: 60000, attempts: 20 }),
+  });
+
+  await assert.rejects(() => env.start('p1'), /未就绪/);
+  assert.deepEqual(runner.stops, ['p1']);
+});
+
+test('依赖成环时不触发回滚（还没有启动任何进程）', async () => {
+  const profile = makeProfile({
+    services: [
+      { id: 'a', startCommand: 'run-a', dependsOn: ['b'] },
+      { id: 'b', startCommand: 'run-b', dependsOn: ['a'] },
+    ],
+  });
+  const { env, runner } = createHarness({ profile });
+
+  await assert.rejects(() => env.start('p1'), /依赖.*环/);
+  assert.deepEqual(runner.stops, []);
+});
+
+test('安装失败时不留下已启动的进程', async () => {
+  const profile = { ...FULL_STACK, autoSetup: true };
+  const { env, runner, calls } = createHarness({ profile, exitCodes: { setup: 1 } });
+
+  await assert.rejects(() => env.start('p1'), /环境搭建失败/);
+  assert.equal(calls.filter((call) => call.kind === 'start').length, 0);
+  assert.deepEqual(runner.stops, []);
+});
