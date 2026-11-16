@@ -15,11 +15,14 @@ fs.mkdirSync(OUT, { recursive: true });
 
 let html = fs.readFileSync(path.join(ROOT, 'renderer', 'index.html'), 'utf8');
 html = html.replace(/<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?\/>\s*/i, '');
+html = html.replace('../electron/services.js', 'services.core.js');
 html = html.replace('<script src="app.js"></script>', '<script src="mock.js"></script>\n    <script src="app.js"></script>');
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 
 fs.copyFileSync(path.join(ROOT, 'renderer', 'styles.css'), path.join(OUT, 'styles.css'));
 fs.copyFileSync(path.join(ROOT, 'renderer', 'app.js'), path.join(OUT, 'app.js'));
+fs.copyFileSync(path.join(ROOT, 'renderer', 'service-form.js'), path.join(OUT, 'service-form.js'));
+fs.copyFileSync(path.join(ROOT, 'electron', 'services.js'), path.join(OUT, 'services.core.js'));
 
 fs.writeFileSync(
   path.join(OUT, 'mock.js'),
@@ -40,6 +43,10 @@ const profiles = [
     ],
     syncDotEnv: true,
     autoSetup: true,
+    services: [
+      { id: 'db', name: 'PostgreSQL', role: 'database', cwd: '.', setupCommand: '', startCommand: 'docker compose up -d db', port: 5432, envVars: [], dependsOn: [] },
+      { id: 'api', name: 'API', role: 'backend', cwd: '.', setupCommand: 'pnpm install', startCommand: 'pnpm dev', port: 4317, envVars: [], dependsOn: ['db'] },
+    ],
     createdAt: Date.now() - 86400000 * 12,
     lastUsedAt: Date.now() - 60000 * 3,
   },
@@ -54,6 +61,9 @@ const profiles = [
     envVars: [],
     syncDotEnv: false,
     autoSetup: true,
+    services: [
+      { id: 'web', name: 'Web', role: 'frontend', cwd: '.', setupCommand: 'npm install', startCommand: 'npm run dev', port: 5173, envVars: [], dependsOn: [] },
+    ],
     createdAt: Date.now() - 86400000 * 30,
     lastUsedAt: Date.now() - 86400000,
   },
@@ -68,6 +78,9 @@ const profiles = [
     envVars: [{ key: 'PYTHONUNBUFFERED', value: '1' }],
     syncDotEnv: false,
     autoSetup: false,
+    services: [
+      { id: 'worker', name: 'Worker', role: 'worker', cwd: '.', setupCommand: 'uv sync', startCommand: 'uv run python -m pipeline serve', port: null, envVars: [], dependsOn: [] },
+    ],
     createdAt: Date.now() - 86400000 * 60,
     lastUsedAt: null,
   },

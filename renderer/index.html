@@ -206,18 +206,12 @@
           </div>
 
           <div class="field">
-            <label for="f-setup">安装 / 搭环境命令</label>
-            <input id="f-setup" type="text" placeholder="npm install" autocomplete="off" spellcheck="false" />
-          </div>
-
-          <div class="field">
-            <label for="f-start">启动命令</label>
-            <input id="f-start" type="text" placeholder="npm run dev" autocomplete="off" spellcheck="false" />
-          </div>
-
-          <div class="field">
-            <label for="f-stop">停止前命令 <span class="optional">可选</span></label>
-            <input id="f-stop" type="text" placeholder="例如 docker compose down" autocomplete="off" spellcheck="false" />
+            <div class="field-head">
+              <label>服务（前端 / 后端 / 数据库）</label>
+              <button type="button" class="link-btn" id="btn-add-service">+ 添加服务</button>
+            </div>
+            <div class="service-editor" id="service-editor"></div>
+            <p class="field-error" id="service-error" hidden></p>
           </div>
 
           <div class="field">
@@ -248,6 +242,8 @@
     </dialog>
 
     <div class="toasts" id="toasts"></div>
+    <script src="../electron/services.js"></script>
+    <script src="service-form.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

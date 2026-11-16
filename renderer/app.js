@@ -1,6 +1,7 @@
 'use strict';
 
 const api = window.devdock;
+const ServiceForm = window.DevDockServiceForm;
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -11,6 +12,7 @@ const state = {
   selectedId: null,
   tab: 'config',
   editingId: null,
+  editorServices: [],
   busy: {},
   detected: {},
   logs: new Map(), // projectId -> { chunks: [], logFile: string|null, bytes: number }
@@ -424,11 +426,16 @@ function openEditor(profile) {
   $('f-name').value = profile ? profile.name : '';
   $('f-dir').value = profile ? profile.dir : '';
   $('f-shell').value = profile ? profile.shell : 'cmd';
-  $('f-setup').value = profile ? profile.setupCommand : '';
-  $('f-start').value = profile ? profile.startCommand : '';
-  $('f-stop').value = profile ? profile.stopCommand : '';
   $('f-auto-setup').checked = profile ? profile.autoSetup : true;
   $('f-sync-env').checked = profile ? profile.syncDotEnv : false;
+  $('service-error').hidden = true;
+
+  const rows = profile ? ServiceForm.buildRows(profile) : [];
+  if (rows.length === 0) {
+    rows.push({ id: 'main', name: '', role: 'app', cwd: '.', setupCommand: '', startCommand: '', port: null, dependsOn: [], envVars: [] });
+  }
+  state.editorServices = rows;
+  renderServiceEditor();
 
   const envEditor = $('env-editor');
   envEditor.innerHTML = '';
@@ -443,6 +450,129 @@ function openEditor(profile) {
 function closeEditor() {
   $('editor').close();
   state.editingId = null;
+  state.editorServices = [];
+}
+
+function renderServiceEditor() {
+  const box = $('service-editor');
+  box.innerHTML = '';
+
+  state.editorServices.forEach((service, index) => {
+    const row = document.createElement('div');
+    row.className = 'service-row';
+    row.dataset.index = String(index);
+    row.innerHTML = `
+      <div class="service-row-head">
+        <input class="svc-name" data-field="name" type="text" placeholder="服务名，如 web / api / db" autocomplete="off" />
+        <select class="svc-role" data-field="role">
+          <option value="frontend">前端</option>
+          <option value="backend">后端</option>
+          <option value="database">数据库</option>
+          <option value="worker">后台任务</option>
+          <option value="app">应用</option>
+        </select>
+        <input class="svc-port" data-field="port" type="text" placeholder="端口" inputmode="numeric" autocomplete="off" />
+        <button type="button" class="btn btn-ghost btn-icon svc-remove" title="删除服务">×</button>
+      </div>
+      <div class="service-row-grid">
+        <input class="svc-cwd" data-field="cwd" type="text" placeholder="目录 ." autocomplete="off" spellcheck="false" />
+        <input class="svc-setup" data-field="setupCommand" type="text" placeholder="安装命令" autocomplete="off" spellcheck="false" />
+        <input class="svc-start" data-field="startCommand" type="text" placeholder="启动命令" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="service-deps">
+        <span>依赖</span>
+        <div class="deps-chips"></div>
+      </div>`;
+
+    row.querySelector('.svc-name').value = service.name;
+    row.querySelector('.svc-role').value = service.role;
+    row.querySelector('.svc-port').value = service.port ?? '';
+    row.querySelector('.svc-cwd').value = service.cwd;
+    row.querySelector('.svc-setup').value = service.setupCommand;
+    row.querySelector('.svc-start').value = service.startCommand;
+
+    row.querySelectorAll('[data-field]').forEach((input) => {
+      input.addEventListener('input', () => {
+        const field = input.dataset.field;
+        service[field] = input.value;
+        if (field === 'name') refreshDependencyChips();
+      });
+    });
+
+    row.querySelector('.svc-remove').addEventListener('click', () => removeService(index));
+    renderDependencyChips(row.querySelector('.deps-chips'), service, index);
+    box.appendChild(row);
+  });
+}
+
+function renderDependencyChips(container, service, index) {
+  container.innerHTML = '';
+  const others = state.editorServices.filter((_, position) => position !== index);
+  if (others.length === 0) {
+    container.innerHTML = '<span class="detect-hint">无其他服务</span>';
+    return;
+  }
+
+  for (const other of others) {
+    const label = document.createElement('label');
+    label.className = 'dep-chip';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = service.dependsOn.includes(other.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        if (!service.dependsOn.includes(other.id)) service.dependsOn.push(other.id);
+      } else {
+        service.dependsOn = service.dependsOn.filter((id) => id !== other.id);
+      }
+    });
+
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(other.name || other.id));
+    container.appendChild(label);
+  }
+}
+
+function refreshDependencyChips() {
+  document.querySelectorAll('.service-row').forEach((row, index) => {
+    const chips = row.querySelector('.deps-chips');
+    if (chips) renderDependencyChips(chips, state.editorServices[index], index);
+  });
+}
+
+function addService() {
+  const used = new Set(state.editorServices.map((service) => service.id));
+  let suffix = state.editorServices.length + 1;
+  let id = `svc-${suffix}`;
+  while (used.has(id)) {
+    suffix += 1;
+    id = `svc-${suffix}`;
+  }
+  state.editorServices.push({
+    id,
+    name: '',
+    role: 'app',
+    cwd: '.',
+    setupCommand: '',
+    startCommand: '',
+    port: null,
+    dependsOn: [],
+    envVars: [],
+  });
+  renderServiceEditor();
+}
+
+function removeService(index) {
+  if (state.editorServices.length <= 1) {
+    toast('至少保留一个服务', 'error');
+    return;
+  }
+  const [removed] = state.editorServices.splice(index, 1);
+  for (const service of state.editorServices) {
+    service.dependsOn = service.dependsOn.filter((id) => id !== removed.id);
+  }
+  renderServiceEditor();
 }
 
 function addEnvRow(key = '', value = '') {
@@ -497,8 +627,18 @@ async function runDetect() {
   hint.className = 'detect-hint';
   try {
     const result = await api.detect(dir);
-    if (result.setupCommand) $('f-setup').value = result.setupCommand;
-    if (result.startCommand) $('f-start').value = result.startCommand;
+    if (Array.isArray(result.services) && result.services.length > 0) {
+      state.editorServices = result.services;
+      renderServiceEditor();
+    } else {
+      const first = state.editorServices[0];
+      if (first) {
+        if (result.setupCommand) first.setupCommand = result.setupCommand;
+        if (result.startCommand) first.startCommand = result.startCommand;
+        if (!first.name.trim() && result.runtime) first.name = result.runtime;
+        renderServiceEditor();
+      }
+    }
     hint.textContent = result.runtime ? `识别为 ${result.runtime}` : '未识别项目类型';
     hint.className = result.runtime ? 'detect-hint ok' : 'detect-hint';
     if (result.notes.length) toast(result.notes.join(' · '));
@@ -521,15 +661,28 @@ async function saveEditor(event) {
   }
 
   const isNew = !state.editingId;
+  const errors = ServiceForm.validateRows(state.editorServices);
+  if (errors.length > 0) {
+    $('service-error').textContent = errors.join('；');
+    $('service-error').hidden = false;
+    return;
+  }
+  $('service-error').hidden = true;
+
+  const services = ServiceForm.collectServices(state.editorServices);
+  const primary = services.find((service) => service.role !== 'database') || services[0];
+  const existing = state.editingId ? profileById(state.editingId) : null;
+
   const payload = {
     id: state.editingId || undefined,
     name: $('f-name').value.trim(),
     dir,
     shell: $('f-shell').value,
-    setupCommand: $('f-setup').value.trim(),
-    startCommand: $('f-start').value.trim(),
-    stopCommand: $('f-stop').value.trim(),
+    setupCommand: primary ? primary.setupCommand : '',
+    startCommand: primary ? primary.startCommand : '',
+    stopCommand: existing ? existing.stopCommand : '',
     envVars: collectEnvVars(),
+    services,
     autoSetup: $('f-auto-setup').checked,
     syncDotEnv: $('f-sync-env').checked,
   };
@@ -630,6 +783,7 @@ function bindEvents() {
   $('btn-browse').addEventListener('click', browse);
   $('btn-detect').addEventListener('click', runDetect);
   $('btn-add-env').addEventListener('click', () => addEnvRow('', ''));
+  $('btn-add-service').addEventListener('click', addService);
 
   $('btn-editor-delete').addEventListener('click', async () => {
     const profile = state.editingId ? profileById(state.editingId) : null;

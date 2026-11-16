@@ -712,7 +712,7 @@ button {
 
 /* ---------- 编辑器 ---------- */
 .editor {
-  width: min(680px, calc(100vw - 60px));
+  width: min(780px, calc(100vw - 60px));
   max-height: calc(100vh - 70px);
   border: 1px solid var(--border-strong);
   border-radius: 16px;
@@ -830,6 +830,101 @@ select {
   flex-direction: column;
   gap: 7px;
 }
+
+/* ---------- 服务编辑器 ---------- */
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.service-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.service-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0c0f14;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.service-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.service-row-head .svc-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.service-row-head .svc-role {
+  flex: 0 0 108px;
+  height: 32px;
+}
+
+.service-row-head .svc-port {
+  flex: 0 0 84px;
+  height: 32px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.service-row-grid {
+  display: grid;
+  grid-template-columns: 140px 1fr 1fr;
+  gap: 7px;
+}
+
+.service-row-grid input {
+  height: 32px;
+  font-size: 12px;
+}
+
+.service-row-grid .svc-start {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.service-deps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.dep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.dep-chip input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.service-row .svc-remove {
+  height: 32px;
+  width: 32px;
+}
+
 .env-row {
   display: flex;
   gap: 7px;

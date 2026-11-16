@@ -182,6 +182,28 @@ async function main() {
           { key: 'NODE_ENV', value: 'development' },
           { key: 'PORT', value: '4317' }
         ],
+        services: [
+          {
+            id: 'db',
+            name: 'PostgreSQL',
+            role: 'database',
+            cwd: '.',
+            setupCommand: '',
+            startCommand: 'echo PostgreSQL ready on 5432',
+            port: null,
+            dependsOn: []
+          },
+          {
+            id: 'api',
+            name: 'API',
+            role: 'backend',
+            cwd: '.',
+            setupCommand: '',
+            startCommand: 'npm run dev',
+            port: null,
+            dependsOn: ['db']
+          }
+        ],
         autoSetup: false,
         syncDotEnv: false
       });
@@ -224,6 +246,13 @@ async function main() {
     fs.mkdirSync(path.dirname(outFile), { recursive: true });
     fs.writeFileSync(outFile, Buffer.from(shot.data, 'base64'));
     console.log(`已保存截图 ${outFile}`);
+
+    await evaluate(`document.getElementById('btn-edit').click()`);
+    await sleep(600);
+    const editorShot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    const editorFile = path.join(ROOT, 'assets', 'screenshot-editor.png');
+    fs.writeFileSync(editorFile, Buffer.from(editorShot.data, 'base64'));
+    console.log(`已保存编辑器截图 ${editorFile}`);
 
     const status = await evaluate('(async () => JSON.stringify(await window.devdock.status()))()');
     console.log('运行状态:', status);

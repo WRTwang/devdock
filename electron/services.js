@@ -139,7 +139,7 @@ function sortServices(services) {
   return { order: ordered.map((id) => list[position.get(id)]), cycle: null };
 }
 
-module.exports = {
+const devDockServicesApi = {
   ROLES,
   normalizeService,
   resolveServices,
@@ -148,3 +148,12 @@ module.exports = {
   normalizeDependsOn,
   toPort,
 };
+
+if (typeof module === 'object' && module.exports) {
+  module.exports = devDockServicesApi;
+}
+
+// 同时暴露给渲染进程（无 Node 环境的浏览器上下文）
+if (typeof globalThis === 'object' && globalThis) {
+  globalThis.DevDockServices = devDockServicesApi;
+}
