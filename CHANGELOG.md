@@ -2,6 +2,15 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.3] - 2026-11-16
+
+### 修复
+
+- **stderr 被整片标红**：Django 的 `Watching for file changes with StatReloader`、访问日志这类正常进度写到 stderr 时不再显示为错误
+- **日志按内容分级**：真正的错误与 Python `Traceback` 整段标红，`warning` / `DeprecationWarning` 标黄，其余 stderr 按普通信息显示
+- **`Traceback` 连续行**保持红色，空行后自动恢复正常
+- **无意义的数据库提示**：没有输入口令、也没有本机服务需要启动时，不再弹「正在准备数据库环境…」
+
 ## [0.4.2] - 2026-11-16
 
 ### 修复

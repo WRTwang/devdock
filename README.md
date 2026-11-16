@@ -46,7 +46,7 @@ DevDock 把这些知识变成**项目档案**：
 | **一键启动/停止** | 通过 `taskkill /T /F` 结束整棵进程树，不留孤儿进程 |
 | **环境隔离** | 子进程级注入环境变量；可选把变量写进项目 `.env`，停止或切换时自动还原 |
 | **活跃环境唯一** | 切换项目时停旧进程、还原旧 `.env`、写切换记录 |
-| **分区日志** | 按服务筛选日志、按 `项目/服务` 分目录保存、一键定位日志文件 |
+| **分区日志** | 按服务筛选日志、按 `项目/服务` 分目录保存、一键定位日志文件；stderr 按内容分级，正常进度不标红 |
 
 ## 快速开始
 
@@ -147,6 +147,16 @@ npm start
 | 启动后立刻退出（`code=0`） | 提示命令是否常驻；若是 DevDock 自己会直接拦截 |
 
 另外，**把 DevDock 自己的目录当项目启动会被直接拦下**：再开一个实例只会被单实例锁结束，并伴随 `0x5` 缓存报错。弹窗会说明原因并建议直接双击应用。
+
+### 日志颜色怎么看
+
+很多程序会把正常进度写到 `stderr`（Django 的 `Watching for file changes`、HTTP 访问日志等），所以 DevDock 不再按「流」整片标红，而是按内容分级：
+
+| 颜色 | 含义 | 例子 |
+| --- | --- | --- |
+| 红 | 真正的错误 | `OperationalError`、`EADDRINUSE`、`拒绝访问`、Python `Traceback` 整段 |
+| 黄 | 警告 | `DeprecationWarning`、`WARNING:` |
+| 正常色 | 普通信息（包括写到 stderr 的进度） | `Watching for file changes with StatReloader`、`Starting development server at ...` |
 
 ### 项目内启动器
 
