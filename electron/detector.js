@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { extractReadmeCommands } = require('./readme-detect');
 
 function exists(dir, name) {
   return fs.existsSync(path.join(dir, name));
@@ -47,6 +48,14 @@ const DATABASE_IMAGE_HINTS = [
 
 function findComposeFile(dir) {
   return COMPOSE_FILES.find((name) => exists(dir, name)) || null;
+}
+
+function findReadme(dir) {
+  try {
+    return fs.readdirSync(dir).find((name) => /^readme\.md$/i.test(name)) || null;
+  } catch {
+    return null;
+  }
 }
 
 function roleForImage(image) {
@@ -451,6 +460,7 @@ function detectProject(dir) {
     setupCommand: '',
     startCommand: '',
     services: [],
+    sources: { setup: 'structure', start: 'structure' },
     notes: [],
     dir,
   };
@@ -516,10 +526,58 @@ function detectProject(dir) {
     }
   }
 
+  // 结构识别出命令但没有服务时，补一个 main 服务，供后续 README 覆盖与编排使用
+  if (result.services.length === 0 && (result.startCommand || result.setupCommand)) {
+    result.services = [
+      {
+        id: 'main',
+        name: path.basename(dir),
+        role: 'app',
+        cwd: '.',
+        setupCommand: result.setupCommand,
+        startCommand: result.startCommand,
+        port: null,
+        envVars: [],
+        dependsOn: [],
+      },
+    ];
+  }
+
+  // README 优先于目录结构，但只在单服务项目里整体覆盖
+  const readmeFile = findReadme(dir);
+  if (readmeFile) {
+    const readme = extractReadmeCommands(readText(dir, readmeFile));
+    if (readme.found) {
+      result.readme = { file: readmeFile, evidence: readme.evidence, port: readme.port };
+
+      if (result.services.length > 1) {
+        const commands = readme.evidence.map((item) => item.command).join(' / ');
+        result.notes.push(`${readmeFile} 里有整体命令（${commands}），多服务项目请分别在服务里确认`);
+      } else {
+        if (readme.setupCommand) {
+          result.setupCommand = readme.setupCommand;
+          result.sources.setup = 'readme';
+          result.notes.push(`安装命令来自 ${readmeFile}`);
+        }
+        if (readme.startCommand) {
+          result.startCommand = readme.startCommand;
+          result.sources.start = 'readme';
+          result.notes.push(`启动命令来自 ${readmeFile}`);
+        }
+        if (result.services.length === 1) {
+          const service = result.services[0];
+          if (readme.setupCommand) service.setupCommand = readme.setupCommand;
+          if (readme.startCommand) service.startCommand = readme.startCommand;
+          if (readme.port && !service.port) service.port = readme.port;
+        }
+      }
+    }
+  }
+
   if (!result.runtime) {
     result.notes.push('未识别项目类型，请手动填写安装与启动命令');
   }
   return result;
 }
 
-module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage };
+module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage, findReadme };
