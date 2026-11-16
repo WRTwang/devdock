@@ -7,6 +7,14 @@
   "author": "DevDock contributors",
   "license": "MIT",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WRTwang/devdock.git"
+  },
+  "homepage": "https://github.com/WRTwang/devdock#readme",
+  "bugs": {
+    "url": "https://github.com/WRTwang/devdock/issues"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "electron .",

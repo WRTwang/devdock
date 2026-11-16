@@ -49,7 +49,7 @@ DevDock 把这些知识变成**项目档案**：
 ### 方式二：从源码运行
 
 ```powershell
-git clone <你的仓库地址>
+git clone https://github.com/WRTwang/devdock.git
 cd devdock
 npm install
 npm start
