@@ -94,4 +94,57 @@ function resolveServices(profile) {
   ];
 }
 
-module.exports = { ROLES, normalizeService, resolveServices, normalizeEnvVars, normalizeDependsOn, toPort };
+/**
+ * 按 dependsOn 做稳定拓扑排序（同一层保持输入顺序）。
+ * 存在环时不返回部分顺序，而是把环上的服务 id 交回调用方。
+ * @returns {{ order: object[], cycle: string[] | null }}
+ */
+function sortServices(services) {
+  const list = Array.isArray(services) ? services : [];
+  if (list.length === 0) return { order: [], cycle: null };
+
+  const ids = new Set(list.map((service) => service.id));
+  const position = new Map(list.map((service, index) => [service.id, index]));
+  const indegree = new Map(list.map((service) => [service.id, 0]));
+  const dependents = new Map(list.map((service) => [service.id, []]));
+
+  for (const service of list) {
+    const deps = new Set(Array.isArray(service.dependsOn) ? service.dependsOn : []);
+    for (const dep of deps) {
+      if (!ids.has(dep)) continue;
+      dependents.get(dep).push(service.id);
+      indegree.set(service.id, indegree.get(service.id) + 1);
+    }
+  }
+
+  const ready = list.filter((service) => indegree.get(service.id) === 0).map((service) => service.id);
+  const ordered = [];
+
+  while (ready.length > 0) {
+    ready.sort((a, b) => position.get(a) - position.get(b));
+    const id = ready.shift();
+    ordered.push(id);
+    for (const next of dependents.get(id)) {
+      const remaining = indegree.get(next) - 1;
+      indegree.set(next, remaining);
+      if (remaining === 0) ready.push(next);
+    }
+  }
+
+  if (ordered.length !== list.length) {
+    const cycle = list.filter((service) => indegree.get(service.id) > 0).map((service) => service.id);
+    return { order: [], cycle };
+  }
+
+  return { order: ordered.map((id) => list[position.get(id)]), cycle: null };
+}
+
+module.exports = {
+  ROLES,
+  normalizeService,
+  resolveServices,
+  sortServices,
+  normalizeEnvVars,
+  normalizeDependsOn,
+  toPort,
+};
