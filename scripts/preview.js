@@ -23,6 +23,7 @@ fs.copyFileSync(path.join(ROOT, 'renderer', 'styles.css'), path.join(OUT, 'style
 fs.copyFileSync(path.join(ROOT, 'renderer', 'app.js'), path.join(OUT, 'app.js'));
 fs.copyFileSync(path.join(ROOT, 'renderer', 'service-form.js'), path.join(OUT, 'service-form.js'));
 fs.copyFileSync(path.join(ROOT, 'renderer', 'log-filter.js'), path.join(OUT, 'log-filter.js'));
+fs.copyFileSync(path.join(ROOT, 'renderer', 'detect-summary.js'), path.join(OUT, 'detect-summary.js'));
 fs.copyFileSync(path.join(ROOT, 'electron', 'services.js'), path.join(OUT, 'services.core.js'));
 
 fs.writeFileSync(

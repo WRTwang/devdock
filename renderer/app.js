@@ -3,6 +3,7 @@
 const api = window.devdock;
 const ServiceForm = window.DevDockServiceForm;
 const LogFilter = window.DevDockLogFilter;
+const DescribeDetection = window.DevDockDetectSummary;
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -708,7 +709,7 @@ async function runDetect() {
         renderServiceEditor();
       }
     }
-    hint.textContent = result.runtime ? `识别为 ${result.runtime}` : '未识别项目类型';
+    hint.textContent = DescribeDetection.describeDetection(result);
     hint.className = result.runtime ? 'detect-hint ok' : 'detect-hint';
     if (result.notes.length) toast(result.notes.join(' · '));
     $('dir-error').hidden = true;
