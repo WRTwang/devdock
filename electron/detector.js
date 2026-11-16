@@ -62,6 +62,129 @@ function parsePort(value) {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
+function packageManagerFor(dir) {
+  if (exists(dir, 'pnpm-lock.yaml')) return 'pnpm';
+  if (exists(dir, 'yarn.lock')) return 'yarn';
+  if (exists(dir, 'bun.lockb') || exists(dir, 'bun.lock')) return 'bun';
+  return 'npm';
+}
+
+function readWorkspacePatterns(dir) {
+  const patterns = [];
+  const pkg = readJson(dir, 'package.json');
+  if (pkg && pkg.workspaces) {
+    const list = Array.isArray(pkg.workspaces) ? pkg.workspaces : pkg.workspaces.packages;
+    if (Array.isArray(list)) patterns.push(...list.filter((item) => typeof item === 'string'));
+  }
+
+  const pnpm = readText(dir, 'pnpm-workspace.yaml');
+  if (pnpm) {
+    let inPackages = false;
+    for (const line of pnpm.split(/\r?\n/)) {
+      if (/^packages:\s*$/.test(line)) {
+        inPackages = true;
+        continue;
+      }
+      if (!inPackages) continue;
+      const match = line.match(/^\s*-\s*['"]?([^'"#]+)['"]?\s*$/);
+      if (match) patterns.push(match[1].trim());
+      else if (line.trim() && !line.startsWith(' ')) break;
+    }
+  }
+
+  return patterns;
+}
+
+function expandWorkspacePattern(dir, pattern) {
+  const normalized = String(pattern).replace(/\\/g, '/').replace(/^\.\//, '');
+  if (normalized.endsWith('/*')) {
+    const base = normalized.slice(0, -2);
+    const baseDir = path.join(dir, base);
+    if (!fs.existsSync(baseDir)) return [];
+    try {
+      return fs
+        .readdirSync(baseDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(base, entry.name));
+    } catch {
+      return [];
+    }
+  }
+  return [normalized];
+}
+
+function roleForWorkspacePackage(name, rel, deps) {
+  const text = `${name} ${rel}`.toLowerCase();
+  if (/(^|[\s/_-])(api|server|backend|service)($|[\s/_-])/.test(text)) return 'backend';
+  if (/(^|[\s/_-])(web|client|frontend|ui|app)($|[\s/_-])/.test(text)) return 'frontend';
+  if (deps.next || deps.react || deps.vue || deps.vite || deps.svelte || deps['@angular/core']) return 'frontend';
+  if (deps.express || deps['@nestjs/core'] || deps.fastify || deps.koa) return 'backend';
+  return 'app';
+}
+
+function workspaceServiceId(name, used) {
+  const base =
+    String(name)
+      .trim()
+      .toLowerCase()
+      .replace(/^@[^/]+\//, '')
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'svc';
+  let id = base;
+  let suffix = 2;
+  while (used.has(id)) {
+    id = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  used.add(id);
+  return id;
+}
+
+/**
+ * 读取 workspace（pnpm-workspace.yaml 或根 package.json workspaces），
+ * 为每个子包生成一个服务，并根据名称 / 依赖推断角色。
+ */
+function detectWorkspaces(dir) {
+  const patterns = readWorkspacePatterns(dir);
+  if (patterns.length === 0) return [];
+
+  const pm = packageManagerFor(dir);
+  const used = new Set();
+  const services = [];
+  const visited = new Set();
+
+  for (const pattern of patterns) {
+    for (const rel of expandWorkspacePattern(dir, pattern)) {
+      if (visited.has(rel)) continue;
+      visited.add(rel);
+
+      const pkgDir = path.join(dir, rel);
+      const pkg = readJson(pkgDir, 'package.json');
+      if (!pkg) continue;
+
+      const name = typeof pkg.name === 'string' && pkg.name.trim() ? pkg.name.trim() : path.basename(rel);
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+      const script = ['dev', 'start', 'serve'].find((key) => scripts[key]);
+      const startCommand = script ? (pm === 'npm' ? `npm run ${script}` : `${pm} run ${script}`) : '';
+
+      services.push({
+        id: workspaceServiceId(name, used),
+        name,
+        role: roleForWorkspacePackage(name, rel, deps),
+        cwd: rel,
+        setupCommand: '',
+        startCommand,
+        port: null,
+        envVars: [],
+        dependsOn: [],
+      });
+    }
+  }
+
+  return services;
+}
+
 /**
  * 极简 docker-compose 解析：只提取服务名、镜像、宿主机端口、depends_on。
  * 不引入 YAML 依赖，只支持缩进块写法与行内数组写法。
@@ -348,27 +471,47 @@ function detectProject(dir) {
     if (detector(dir, result)) break;
   }
 
+  const workspaceServices = detectWorkspaces(dir);
+  if (workspaceServices.length > 0) {
+    result.services = workspaceServices;
+    if (!result.runtime) result.runtime = 'Workspace';
+    result.notes.push(`识别到 ${workspaceServices.length} 个 workspace 服务`);
+  }
+
   const composeFile = findComposeFile(dir);
   if (composeFile) {
     const composeServices = parseComposeServices(readText(dir, composeFile));
     if (composeServices.length > 0) {
-      result.services = composeServices;
       const dataIds = composeServices.filter((service) => service.role === 'database').map((service) => service.id);
 
-      if (result.runtime && result.runtime !== 'Docker Compose') {
+      if (result.services.length > 0) {
+        if (dataIds.length > 0) {
+          for (const service of result.services) {
+            if (service.role === 'database') continue;
+            service.dependsOn = [...new Set([...service.dependsOn, ...dataIds])];
+          }
+        }
+        result.services = [...composeServices, ...result.services];
+        result.notes.push(`已把 ${composeServices.length} 个容器服务接入编排`);
+      } else if (result.runtime && result.runtime !== 'Docker Compose') {
         const appId = composeServices.some((service) => service.id === 'main') ? 'main-app' : 'main';
-        result.services.push({
-          id: appId,
-          name: path.basename(dir),
-          role: 'app',
-          cwd: '.',
-          setupCommand: result.setupCommand,
-          startCommand: result.startCommand,
-          port: null,
-          envVars: [],
-          dependsOn: dataIds,
-        });
+        result.services = [
+          ...composeServices,
+          {
+            id: appId,
+            name: path.basename(dir),
+            role: 'app',
+            cwd: '.',
+            setupCommand: result.setupCommand,
+            startCommand: result.startCommand,
+            port: null,
+            envVars: [],
+            dependsOn: dataIds,
+          },
+        ];
         result.notes.push(`已把 ${dataIds.length} 个数据库服务设为主应用的依赖`);
+      } else {
+        result.services = composeServices;
       }
     }
   }
@@ -379,4 +522,4 @@ function detectProject(dir) {
   return result;
 }
 
-module.exports = { detectProject, parseComposeServices, parsePort, roleForImage };
+module.exports = { detectProject, detectWorkspaces, parseComposeServices, parsePort, roleForImage };
