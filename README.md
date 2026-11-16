@@ -40,6 +40,10 @@ DevDock 把这些知识变成**项目档案**：
 | **一键搭环境** | 按依赖顺序执行各服务的安装命令，输出实时推送并落盘 |
 | **环境体检** | 同时读 README 与 `package.json` / `requirements.txt` / `pyproject.toml`，逐项判断已就绪（绿）/ 缺失（黄）/ 异常（红） |
 | **按需安装** | 缺什么装什么；需要下载或升级工具时先弹确认框，同意后才联网执行 |
+| **装完复检** | 安装结束自动重新体检，仍缺什么会明确列出来，不会假装成功 |
+| **多布局兼容** | Python 的 `.venv\Scripts` 与 MSYS2/Cygwin 的 `.venv/bin` 都识别；`Procfile` / `.python-version` / `requirements/` 子目录 / `setup.py` 都能用 |
+| **子项目识别** | 根目录没有清单时，自动识别一层 `backend/` + `web/` 这类前后端子项目并分别装环境、分别启动 |
+| **venv 命令切换** | 检测到 venv 后，启动与安装里的 `python` / `pip` / `uvicorn` 自动改用 venv 解释器，不会装到系统 Python |
 | **数据库口令** | 识别 PostgreSQL / MySQL / Redis / MongoDB，弹窗输入口令后自启本机数据库服务并注入连接串 |
 | **删除即清理** | 删除档案时询问是否连同 `.venv` / `node_modules` / `.devdock` 等环境残留一起删除 |
 | **启动失败诊断** | 进程退出后按日志归类（权限 / 端口占用 / 缺命令 / 缺依赖 / 数据库连不上 / 秒退），能修的给一键修复，权限问题直接弹窗提权 |
@@ -116,6 +120,11 @@ npm start
 
 - **同时读 README 与清单**：README 写了安装步骤时，会按语言并回对应的体检项（并优先使用 README 的命令）；只有完全对不上生态的命令才单独列一条「README 安装步骤」。
 - **README 命令不装错地方**：README 里的裸 `pip install` 会自动改写成项目 venv 里的解释器；README 指向尚未创建的 venv 时会先建环境。
+- **venv 布局兼容**：优先用 Windows 的 `py -3` 创建原生 `.venv\Scripts`；如果只有 MSYS2 / Cygwin 的 Python，也能识别 `.venv\bin` 并在两种布局间自动回退。
+- **启动自动切 venv**：项目里有 venv 时，`python app.py`、`pip install`、`uvicorn ...` 会自动换成 venv 解释器，不会出现「装好了但启动找不到包」。
+- **`.env` 准备**：只有 `.env.example` / `.env.sample` 时，会提示并复制一份 `.env`；删除项目时只有「原样未改」的副本才会被清掉。
+- **清单兜底**：`setup.py`、`requirements/base.txt`、`.python-version`、`Procfile` / `Procfile.windows` 都能识别；`%PORT%` 会替换成具体端口。
+- **子项目**：根目录没有清单时，会扫一层子目录，识别 `backend/`（Python）与 `web/`（Node）这类结构，分别安装、分别启动。
 - **优先用你已有的工具**：Python 项目按 `uv.lock` → `pyproject.toml` 的 Poetry → `Pipfile` → 默认 `python -m venv` 依次选择；工具已装且版本达标就直接用，不再重复安装。
 - **需要下载才弹窗**：工具缺失或版本低于最低要求时，安装计划里标记「需下载」，只有点「同意并安装」才执行 `winget` / `npm -g` / `pip install -U`。
 - **逐项安装**：每条缺失项右侧都有「安装此项」，也可以点右上角「安装缺失项」一次装完。
@@ -131,7 +140,13 @@ npm start
 4. 连接串按引擎拼成 `DATABASE_URL`（Redis 为 `REDIS_URL`），启动服务时注入；勾选写入 `.env` 时会同步落盘，停止或切换时自动还原。
 5. 下次启动若内存里没有口令，会再次弹框——这是刻意的，避免明文落盘。
 
-删除项目时如果项目里有 `.venv` / `node_modules` / `.devdock` / `devdock.cmd` 等，会列出清单并默认勾选「一并删除」，确认后才清理；项目源码永远不动。
+删除项目时会把残留列清楚，默认全选：
+
+- **环境与 DevDock 残留**：项目内任意层级的 `.venv` / `venv` / `node_modules` / `.devdock` / `devdock.cmd`；原样未改的 `.env` 副本也会清掉。
+- **缓存与构建产物**：`__pycache__`、`.pytest_cache`、`.mypy_cache`、`.next`、`dist`、`build`、`target`、`coverage` 等，可在弹窗里取消勾选。
+- **Docker**：检测到 `docker compose` 时，删除前会执行 `docker compose down --remove-orphans` 停掉该项目的容器（保留数据卷）。
+
+项目源码永远不会被删除。实测：Node 项目删除后 `node_modules`、`.devdock`、`devdock.cmd`、复制出来的 `.env` 全部消失；Python 项目同样清掉 `.venv`。
 
 ### 启动失败时
 

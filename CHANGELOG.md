@@ -2,6 +2,30 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-11-16
+
+### 新增
+
+- **装完自动复检**：安装结束重新体检，仍有缺失项会列出具体项目，不再直接标记「已就绪」
+- **venv 命令切换**：检测到项目 venv 后，启动与安装中的 `python` / `pip` / `uvicorn` 等命令自动切到 venv 解释器
+- **多布局 venv**：兼容 `.venv\Scripts`（Windows 原生）与 `.venv\bin`（MSYS2 / Cygwin），并优先用 `py -3` 创建原生 venv
+- **`.env` 准备**：只有 `.env.example` / `.env.sample` 时提示复制，安装计划里可直接生成
+- **子项目识别**：根目录没有清单时识别一层 `backend/` + `web/` 子项目，分别体检、安装与启动
+- **清单兜底**：支持 `setup.py`、`requirements/base.txt`、`.python-version`、`Procfile` / `Procfile.windows`（`%PORT%` 自动替换）
+- **删除更彻底**：递归清理任意层级的 venv / node_modules / 缓存 / 构建产物，可选是否删缓存与构建；Docker compose 项目会先 `down --remove-orphans`
+- **原样 `.env` 副本**：从示例复制且没被改过的 `.env` 会随环境一起删除，改过的保留
+
+### 修复
+
+- **Windows 引号命令失败**：`cmd` 会收到被转义的 `\"`，导致带引号路径（如 venv 中的 python）无法执行
+- **Python 启动找不到包**：依赖装在 venv，启动却用系统 Python
+- **README 提一句 PostgreSQL 就误报数据库**：现在只认 compose 镜像、数据库服务或真实连接串
+- **安装过程中可点启动**：安装期间禁用启动按钮并给出提示
+
+### 实测
+
+- 以 Heroku 的 Node / Python 示例项目为蓝本做端到端：体检 → 安装 → 启动返回 HTTP 200 → 删除；删除后无 `.venv` / `node_modules` / `.devdock` / `.env` 残留，源码保留。
+
 ## [0.4.3] - 2026-11-16
 
 ### 修复
